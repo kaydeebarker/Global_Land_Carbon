@@ -1,0 +1,100 @@
+---
+title: "Global Carbon Estimates"
+author: "Kaydee S. Barker"
+date: '2023-09-22'
+output: 
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+rm(list=ls()) #clear global environment/workspace
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load libraries, include=FALSE}
+library(readr) #read files
+library(tidyverse) #Tidy packages
+library(dplyr)
+library(sf) #Spatial package that can read and create shapefiles 
+library(terra) #Spatial package that can work with raster files
+library(ggplot2) #Pretty plots
+
+```
+
+## Ecosystem Cover Data
+
+
+```{r cover}
+
+# Download total land cover map from FAO
+#download.file("https://storage.googleapis.com/fao-maps-catalog-data/uuid/ba4526fd-cdbf-4028-a1bd-5a559c4bff38/resources/GlcShare_v10_Dominant.zip", destfile= "FAO_covermap.zip")
+#unzip("FAO_covermap.zip", exdir = ".")
+#file.remove("FAO_covermap.zip")
+
+biomes <- rast("glc_shv10_DOM.Tif")
+
+plot(biomes) #look at map
+
+#make df of frequency of each value in raster
+landcover <- as.data.frame(freq(biomes)) %>%
+  rename("Area" = "count")
+
+landcover$Ecosystem <- c("Null", "Artificial", "Croplands", "Grasslands", "Tree Covered", "Shrublands", "Herbaceous Wetlands", "Mangroves", "Sparse Veg", "Bare Soil", "Snow & Glaciers", "Water")
+
+#Split out and add ecosystems based on proportion
+
+#Tropical forests - based on FAO 2020
+tropfor <- data.frame(1,12,71015243*0.45, "Tropical Forests")
+names(tropfor) <- c("layer","value","Area","Ecosystem")
+landcover <- rbind(landcover, tropfor)
+
+#Temperate forests - based on FAO 2020
+tempfor <- data.frame(1,12,71015243*0.16, "Temperate Forests")
+names(tempfor) <- c("layer","value","Area","Ecosystem")
+landcover <- rbind(landcover, tempfor)
+
+#Temperate grasslands - based on Dinerstein et al. 2017
+tempgr <- data.frame(1,12,33129685*0.33, "Temperate Grasslands")
+names(tempgr) <- c("layer","value","Area","Ecosystem")
+landcover <- rbind(landcover, tempgr)
+
+# Savannas - based on Dinerstein et al. 2017, plus shrub
+savshrub <- data.frame(1,12,(33129685*0.67)+18337497, "Savannas & Shrublands")
+names(savshrub) <- c("layer","value","Area","Ecosystem")
+landcover <- rbind(landcover, savshrub)
+
+AMcover <- landcover[,c(3,4)] %>%
+  filter(Ecosystem != "Null") %>% # filters out
+  filter(Ecosystem != "Artificial") %>%
+  filter(Ecosystem != "Grasslands") %>%
+  filter(Ecosystem != "Tree Covered") %>%
+  filter(Ecosystem != "Shrublands") %>%
+  filter(Ecosystem != "Herbaceous Wetlands") %>%
+  filter(Ecosystem != "Mangroves") %>%
+  filter(Ecosystem != "Sparse Veg") %>%
+  filter(Ecosystem != "Bare Soil") %>%
+  filter(Ecosystem != "Snow & Glaciers") %>%
+  filter(Ecosystem != "Water")
+
+```
+
+## Carbon Data
+
+```{r C data}
+
+#aboveground and root C data from Robinson 2007, Liu et al. 2015
+#used proportion of root:shoot from Robinson 2007 to fill in Liu et al. 2015 root C estimates - in Pg C
+plantC <- read_csv("plantC.csv")
+
+#merge with cover
+coverC <- merge(AMcover, plantC, 
+	by="Ecosystem", all.x = T) #merge 
+
+
+
+```
+
