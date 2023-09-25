@@ -43,27 +43,27 @@ plot(biomes) #look at map
 landcover <- as.data.frame(freq(biomes)) %>%
   rename("Area" = "count")
 
-landcover$Ecosystem <- c("Null", "Artificial", "Croplands", "Grasslands", "Tree Covered", "Shrublands", "Herbaceous Wetlands", "Mangroves", "Sparse Veg", "Bare Soil", "Snow & Glaciers", "Water")
+landcover$Ecosystem <- c("Null", "Artificial", "Cropland", "Grassland", "Tree Covered", "Shrubland", "Herbaceous Wetland", "Mangrove", "Sparse Veg", "Bare Soil", "Snow & Glaciers", "Water")
 
 #Split out and add ecosystems based on proportion
 
 #Tropical forests - based on FAO 2020
-tropfor <- data.frame(1,12,71015243*0.45, "Tropical Forests")
+tropfor <- data.frame(1,12,71015243*0.45, "Tropical Forest")
 names(tropfor) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, tropfor)
 
 #Temperate forests - based on FAO 2020
-tempfor <- data.frame(1,12,71015243*0.16, "Temperate Forests")
+tempfor <- data.frame(1,12,71015243*0.16, "Temperate Forest")
 names(tempfor) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, tempfor)
 
 #Temperate grasslands - based on Dinerstein et al. 2017
-tempgr <- data.frame(1,12,33129685*0.33, "Temperate Grasslands")
+tempgr <- data.frame(1,12,33129685*0.33, "Temperate Grassland")
 names(tempgr) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, tempgr)
 
-# Savannas - based on Dinerstein et al. 2017, plus shrub
-savshrub <- data.frame(1,12,(33129685*0.67)+18337497, "Savannas & Shrublands")
+#Savannas - based on Dinerstein et al. 2017, plus shrub
+savshrub <- data.frame(1,12,(33129685*0.67)+18337497, "Savanna & Shrubland")
 names(savshrub) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, savshrub)
 
@@ -90,10 +90,89 @@ AMcover <- landcover[,c(3,4)] %>%
 #used proportion of root:shoot from Robinson 2007 to fill in Liu et al. 2015 root C estimates - in Pg C
 plantC <- read_csv("plantC.csv")
 
-#merge with cover
+#merge with cover, add ERH C based on Soudzilovskaia et al. 2015 - g/m-2 estimates. Different than C flux from Hawkins et al. 2023
 coverC <- merge(AMcover, plantC, 
-	by="Ecosystem", all.x = T) #merge 
+	by="Ecosystem", all.x = T) %>% #merge 
+  mutate(AMbio_C = (Area*1000000)*0.0000000000000475) #add ERH
 
+#C flux per veg type via Hawkins et al. 2023
+
+#Croplands
+cropAM <- coverC %>%
+  filter(Ecosystem == "Cropland") %>%
+  mutate(Allo_C = AGB_C * 0.033) 
+coverC2 <- merge(coverC, cropAM)
+
+#Savannas & shrublands
+ssAM <- coverC %>%
+  filter(Ecosystem == "Savanna & Shrubland") %>%
+  mutate(Allo_C = (AGB_C/2 * 0.065) + (AGB_C/2 * 0.023))
+coverC2 <- rbind(coverC2, ssAM)
+
+#Temperate grasslands
+tgAM <- coverC %>%
+  filter(Ecosystem == "Temperate Grassland") %>%
+  mutate(Allo_C = AGB_C * 0.065) 
+coverC2 <- rbind(coverC2, tgAM)
+
+#Temperate forests
+tfAM <- coverC %>%
+  filter(Ecosystem == "Temperate Forest") %>%
+  mutate(Allo_C = AGB_C * 0.023) 
+coverC2 <- rbind(coverC2, tfAM)
+
+#Tropical forests
+trfAM <- coverC %>%
+  filter(Ecosystem == "Tropical Forest") %>%
+  mutate(Allo_C = AGB_C * 0.023) 
+coverC2 <- rbind(coverC2, trfAM)
+
+#MAOM and POM C data from Georgiou et al. 2022
+SOMC <- read_csv("MOC_synthesis.csv") %>%
+  filter(Top.depth == 0) %>%
+  rename("Ecosystem" = "Vegetation") %>%
+  rename("MAOM_C" = "SiltClayC") %>%
+  select(Ecosystem, Top.depth, Bottom.depth, Bulk.C, MAOM_C, POM_C)
+SOMC[SOMC == 0] <- NA #replace zeros with NA
+SOMC[SOMC == "Grassland"] <- "Temperate Grassland"
+SOMC[SOMC == "Savanna"] <- "Savanna & Shrubland"
+SOMC[SOMC == "Shrubland"] <- "Savanna & Shrubland"
+
+SOMCmeans <- SOMC %>%
+  group_by(Ecosystem) %>%
+  summarise_if(is.numeric, mean, na.rm = TRUE)
+
+#Scale to area of biome, using average bulk density & sampling depth
+coverC3 <- merge(coverC2, SOMC) %>%
+  select(-Top.depth) %>%
+  mutate(PgC = (1.33*Bottom.depth*10000000000)*
+           (Bulk.C/1000000000000000000)*Area) %>%
+  mutate(MAOM_PgC = (1.33*Bottom.depth*10000000000)*
+           (MAOM_C/1000000000000000000)*Area) %>%
+  mutate(POM_PgC = (1.33*Bottom.depth*10000000000)*
+           (POM_C/1000000000000000000)*Area)
+
+Cpoolmeans <- coverC3 %>%
+  group_by(Ecosystem) %>%
+  summarise_if(is.numeric, mean, na.rm = TRUE)
+
+#Scale to area of biome, using average bulk density & sampling depth
+coverC4 <- merge(coverC2, SOMCmeans) %>%
+  select(-Top.depth) %>%
+  mutate(PgC = (1.33*Bottom.depth*10000000000)*
+           (Bulk.C/1000000000000000000)*Area) %>%
+  mutate(MAOM_PgC = (1.33*Bottom.depth*10000000000)*
+           (MAOM_C/1000000000000000000)*Area) %>%
+  mutate(POM_PgC = (1.33*Bottom.depth*10000000000)*
+           (POM_C/1000000000000000000)*Area)
+
+#write_csv(coverC3, "Cpools.csv")
+#write_csv(Cpoolmeans, "Cpoolmeans.csv")
+
+```
+
+
+```{r}
 
 
 ```
