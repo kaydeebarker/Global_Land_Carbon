@@ -27,6 +27,7 @@ library(ggplot2) #Pretty plots
 
 ## Ecosystem Cover Data
 
+Biomes containing arbuscular mycorrhizal (AM) fungi include croplands, temperate grasslands, savannas and shrublands (i.e. tropical grasslands), temperate forests, and tropical forests. I used data from the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)) and proportions from [Dinerstein et al. 2017](https://doi.org/10.1093/biosci/bix014) to determine total area in square kilometers for each biome with AM fungi.
 
 ```{r cover}
 
@@ -84,11 +85,24 @@ AMcover <- landcover[,c(3,4)] %>%
 
 ## Carbon Data
 
-```{r C data}
+### Plant Carbon
+
+Aboveground carbon (C) and root C were taken from previous C estimates and root:shoot ratios ([Robinson 2007](https://royalsocietypublishing.org/doi/10.1098/rspb.2007.1012), [Liu et al. 2015](https://www.nature.com/articles/nclimate2581)). All C data is in petagrams (Pg) of C.
+
+```{r plant C data}
 
 #aboveground and root C data from Robinson 2007, Liu et al. 2015
 #used proportion of root:shoot from Robinson 2007 to fill in Liu et al. 2015 root C estimates - in Pg C
 plantC <- read_csv("plantC.csv")
+
+```
+
+### AM Fungal Carbon
+
+To estimate the contribution of AM fungal biomass to global C pools, I used the estimated amount of AM extra-radical hyphal biomass C in grams per square meter (g/m^2) from [Soudzilovskaia et al. 2015](https://onlinelibrary.wiley.com/doi/10.1111/nph.13447), scaled it to total biome area, and converted the units to Pg of C. Additionally, I included estimated C allocation from plants to mycorrhizae per year based on vegetation type averages from [Hawkins et al. 2023](https://doi.org/10.1016/j.cub.2023.02.027) and scaled to total biome area for a Pg of C per year estimate.
+
+
+```{r AM C data}
 
 #merge with cover, add ERH C based on Soudzilovskaia et al. 2015 - g/m-2 estimates. Different than C flux from Hawkins et al. 2023
 coverC <- merge(AMcover, plantC, 
@@ -127,44 +141,40 @@ trfAM <- coverC %>%
   mutate(Allo_C = AGB_C * 0.023) 
 coverC2 <- rbind(coverC2, trfAM)
 
+```
+
+### Soil Organic Matter Fractions
+
+To estimate how much C is stored in particulate organic matter (POM) or mineral-associated organic matter (MAOM) fractions across biomes globally, I used data from [Georgiou et al. 2022](https://www.nature.com/articles/s41467-022-31540-9). The top 30cm was selected to compare topsoil, and was scaled up 
+
+```{r SOM C data}
+
 #MAOM and POM C data from Georgiou et al. 2022
 SOMC <- read_csv("MOC_synthesis.csv") %>%
-  filter(Top.depth == 0) %>%
   rename("Ecosystem" = "Vegetation") %>%
   rename("MAOM_C" = "SiltClayC") %>%
   select(Ecosystem, Top.depth, Bottom.depth, Bulk.C, MAOM_C, POM_C)
-SOMC[SOMC == 0] <- NA #replace zeros with NA
 SOMC[SOMC == "Grassland"] <- "Temperate Grassland"
 SOMC[SOMC == "Savanna"] <- "Savanna & Shrubland"
 SOMC[SOMC == "Shrubland"] <- "Savanna & Shrubland"
 
-SOMCmeans <- SOMC %>%
+SOMC_top30 <- SOMC %>%
+  filter(Bottom.depth <= 30)
+
+#Scale to area of biome, using average bulk density & sampling depth
+coverC_top30 <- merge(coverC2, SOMC_top30) %>%
+  mutate(PgC = (1.33*(Bottom.depth)*10000000000)*
+           (Bulk.C/1000000000000000000)*Area) %>%
+  mutate(MAOM_PgC = (1.33*(Bottom.depth)*10000000000)*
+           (MAOM_C/1000000000000000000)*Area) %>%
+  mutate(POM_PgC = (1.33*(Bottom.depth)*10000000000)*
+           (POM_C/1000000000000000000)*Area)
+
+Ctop30means <- coverC_top30 %>%
   group_by(Ecosystem) %>%
   summarise_if(is.numeric, mean, na.rm = TRUE)
 
-#Scale to area of biome, using average bulk density & sampling depth
-coverC3 <- merge(coverC2, SOMC) %>%
-  select(-Top.depth) %>%
-  mutate(PgC = (1.33*Bottom.depth*10000000000)*
-           (Bulk.C/1000000000000000000)*Area) %>%
-  mutate(MAOM_PgC = (1.33*Bottom.depth*10000000000)*
-           (MAOM_C/1000000000000000000)*Area) %>%
-  mutate(POM_PgC = (1.33*Bottom.depth*10000000000)*
-           (POM_C/1000000000000000000)*Area)
 
-Cpoolmeans <- coverC3 %>%
-  group_by(Ecosystem) %>%
-  summarise_if(is.numeric, mean, na.rm = TRUE)
-
-#Scale to area of biome, using average bulk density & sampling depth
-coverC4 <- merge(coverC2, SOMCmeans) %>%
-  select(-Top.depth) %>%
-  mutate(PgC = (1.33*Bottom.depth*10000000000)*
-           (Bulk.C/1000000000000000000)*Area) %>%
-  mutate(MAOM_PgC = (1.33*Bottom.depth*10000000000)*
-           (MAOM_C/1000000000000000000)*Area) %>%
-  mutate(POM_PgC = (1.33*Bottom.depth*10000000000)*
-           (POM_C/1000000000000000000)*Area)
 
 #write_csv(coverC3, "Cpools.csv")
 #write_csv(Cpoolmeans, "Cpoolmeans.csv")
