@@ -22,6 +22,8 @@ library(dplyr)
 library(sf) #Spatial package that can read and create shapefiles 
 library(terra) #Spatial package that can work with raster files
 library(ggplot2) #Pretty plots
+library(devtools) #install packages
+
 
 ```
 
@@ -84,6 +86,19 @@ AMcover <- landcover[,c(3,4)] %>%
 ```
 
 ## Carbon Data
+
+### Soil Data
+
+The [International Soil Carbon Network](http://iscn.fluxdata.org/) has made a global dataset of soil characteristics available for public use ([Nave et al. 2016](https://www.osti.gov/biblio/1305039)).
+
+```{r soil data, error=FALSE}
+
+install_github("ISCN/SOCDRaHR2")
+library(SOCDRaH2)
+ISCNdownload <- ISCN3 #load function to download ISCN data
+ISCNdownload()
+
+```
 
 ### Plant Carbon
 
