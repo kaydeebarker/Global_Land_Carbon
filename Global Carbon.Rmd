@@ -15,58 +15,112 @@ rm(list=ls()) #clear global environment/workspace
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r load libraries, include=FALSE}
+```{r load libraries}
+
 library(readr) #read files
 library(tidyverse) #Tidy packages
 library(dplyr)
 library(sf) #Spatial package that can read and create shapefiles 
-library(terra) #Spatial package that can work with raster files
 library(ggplot2) #Pretty plots
 library(devtools) #install packages
-
+library(RColorBrewer)
+library(ggthemes)
 
 ```
 
 ## Ecosystem Cover Data
 
-Biomes containing arbuscular mycorrhizal (AM) fungi include croplands, temperate grasslands, savannas and shrublands (i.e. tropical grasslands), temperate forests, and tropical forests. I used data from the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)) and proportions from [Dinerstein et al. 2017](https://doi.org/10.1093/biosci/bix014) to determine total area in square kilometers for each biome with AM fungi.
+Biomes containing arbuscular mycorrhizal (AM) fungi include croplands, temperate grasslands, savannas and shrublands (i.e. tropical grasslands), temperate forests, and tropical forests. I used data from the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)) and proportions from [Dinerstein et al. 2017](https://doi.org/10.1093/biosci/bix014) to determine total area in square kilometers for each biome, Then used data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the proportion of AM vs. ectomycorrhizal (EcM) fungal trees.
 
 ```{r cover}
 
-# Download total land cover map from FAO
-#download.file("https://storage.googleapis.com/fao-maps-catalog-data/uuid/ba4526fd-cdbf-4028-a1bd-5a559c4bff38/resources/GlcShare_v10_Dominant.zip", destfile= "FAO_covermap.zip")
-#unzip("FAO_covermap.zip", exdir = ".")
-#file.remove("FAO_covermap.zip")
+#Download total land cover map from FAO if not downloaded already
+if(file.exists('/glc_shv10_DOM.Tif')){
+  print('downloaded')
+  }else{
+  download.file("https://storage.googleapis.com/fao-maps-catalog-data/uuid/ba4526fd-cdbf-4028-a1bd-5a559c4bff38/resources/GlcShare_v10_Dominant.zip", destfile= "FAO_covermap.zip")
+unzip("FAO_covermap.zip", exdir = ".")
+file.remove("FAO_covermap.zip")}
 
 biomes <- rast("glc_shv10_DOM.Tif")
 
-plot(biomes) #look at map
-
-#make df of frequency of each value in raster
+#Make df of frequency of each value in raster
 landcover <- as.data.frame(freq(biomes)) %>%
-  rename("Area" = "count")
+  rename("Area" = "count") 
 
 landcover$Ecosystem <- c("Null", "Artificial", "Cropland", "Grassland", "Tree Covered", "Shrubland", "Herbaceous Wetland", "Mangrove", "Sparse Veg", "Bare Soil", "Snow & Glaciers", "Water")
 
-#Split out and add ecosystems based on proportion
+#Download total land cover map from EcoRegions2017 if not downloaded already
+if(file.exists('/Ecoregions2017.shp')){
+  print('downloaded')
+  }else{
+  download.file("https://storage.googleapis.com/teow2016/Ecoregions2017.zip", 
+                destfile= "Ecoregions2017.zip", method= "libcurl", 
+                quiet = FALSE, mode = "w", cacheOK = TRUE,
+                options(timeout = max(300, getOption("timeout"))))
+unzip("Ecoregions2017.zip", exdir = ".")
+file.remove("Ecoregions2017.zip")}
 
-#Tropical forests - based on FAO 2020
-tropfor <- data.frame(1,12,71015243*0.45, "Tropical Forest")
+ecoregions <- st_read("Ecoregions2017.shp")
+
+library(foreign)
+ecoregions_df <- read.dbf("Ecoregions2017.dbf")
+
+#Calculate area of each ecoregion into sq km
+st_crs(ecoregions) #check coordinate system
+ecoregions <- st_make_valid(ecoregions) #fix invalid geometries
+
+#Transform to a projected CRS (e.g., UTM) for accurate area calculations
+#Replace EPSG:4326 with planar CRS (e.g., EPSG:3395 for World Mercator)
+projected_ecoregions <- st_transform(ecoregions, crs = 3395) # EPSG:3395 for World Mercator
+
+#Calculate area in square meters and convert to square kilometers
+projected_ecoregions$area_sq_m <- st_area(projected_ecoregions)
+projected_ecoregions$area_sq_km <- as.numeric(projected_ecoregions$area_sq_m) / 1e6
+
+
+#Split out and add ecosystems based on proportion - data from FAO 2020, Dinerstein et al. 2017, Steidinger et al. 2019 for AM vs. EcM ratio in forests
+
+#Proportions data
+Dinerstein <- data.frame(
+  Biome = c("1. Tropical and subtropical moist broadleaf forests", "2. Tropical and subtropical dry broadleaf forests", "3. Tropical and subtropical coniferous forests", "4. Temperate broadleaf and mixed forests", "5. Temperate conifer forests", "6. Boreal forests or taiga", "14. Mangroves", "Forested subtotal", "7. Tropical grasslands, savannas, and shrublands", "8. Temperate grasslands, savannas, and shrublands", "9. Flooded grasslands and savannas", "10. Montane grasslands and shrublands", "11. Tundra", "12. Mediterranean forests, woodlands, and scrub", "13. Desert and xeric shrublands", "Nonforested subtotal"),
+  Percent = c(14.4, 2.9, 0.5, 9.3, 2.8, 11.4, 0.2, 41.3, 15.8, 7.8, 0.9, 3.6, 8.7, 2.4, 19.3, 58.5)
+)
+Steidinger <- read.csv('AM_EM_proportions.csv') #read in data
+
+#Tropical and subtropical forests
+tropfor <- data.frame(1,12,
+            landcover$Area[landcover$Ecosystem == "Tree Covered"]*
+              ((Dinerstein$Percent[Dinerstein$Biome == "1. Tropical and subtropical moist broadleaf forests"]*(Steidinger$median[Steidinger$group_id == "Wet_trop_broadleaf_AM"])/100) +
+                 (Dinerstein$Percent[Dinerstein$Biome == "2. Tropical and subtropical dry broadleaf forests"]*(Steidinger$median[Steidinger$group_id == "Dry_trop_broadleaf_AM"])/100) +
+              (Dinerstein$Percent[Dinerstein$Biome == "3. Tropical and subtropical coniferous forests"]*(Steidinger$median[Steidinger$group_id == "Trop_conifer_AM"])/100)) /
+                 Dinerstein$Percent[Dinerstein$Biome == "Forested subtotal"],
+            "Tropical Forest")
 names(tropfor) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, tropfor)
 
-#Temperate forests - based on FAO 2020
-tempfor <- data.frame(1,12,71015243*0.16, "Temperate Forest")
+#Temperate forests
+tempfor <- data.frame(1,13,landcover$Area[landcover$Ecosystem == "Tree Covered"]*
+          ((Dinerstein$Percent[Dinerstein$Biome == "4. Temperate broadleaf and mixed forests"]*(Steidinger$median[Steidinger$group_id == "Temp_mixed_AM"])/100) +
+            (Dinerstein$Percent[Dinerstein$Biome == "5. Temperate conifer forests"]*(Steidinger$median[Steidinger$group_id == "Temp_conifer_AM"])/100)) /
+            Dinerstein$Percent[Dinerstein$Biome == "Forested subtotal"],
+                      "Temperate Forest")
 names(tempfor) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, tempfor)
 
-#Temperate grasslands - based on Dinerstein et al. 2017
-tempgr <- data.frame(1,12,33129685*0.33, "Temperate Grassland")
+#Temperate grasslands
+tempgr <- data.frame(1,14,
+                     (landcover$Area[landcover$Ecosystem == "Grassland"] + 
+                        landcover$Area[landcover$Ecosystem == "Shrubland"]) *
+                      ((Dinerstein$Percent[Dinerstein$Biome == "8. Temperate grasslands, savannas, and shrublands"]*((Steidinger$median[Steidinger$group_id == "Temp_savannah_AM"] + Steidinger$median[Steidinger$group_id == "Xeric_shrub_AM"] + 85)/3)/100)) /
+                        Dinerstein$Percent[Dinerstein$Biome == "Nonforested subtotal"],
+                     "Temperate Grassland, Shrubland, and Savanna")
 names(tempgr) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, tempgr)
 
 #Savannas - based on Dinerstein et al. 2017, plus shrub
-savshrub <- data.frame(1,12,(33129685*0.67)+18337497, "Savanna & Shrubland")
+savshrub <- data.frame(1,15,
+                       (33129685*0.67)+18337497, "Savanna & Shrubland")
 names(savshrub) <- c("layer","value","Area","Ecosystem")
 landcover <- rbind(landcover, savshrub)
 
@@ -93,10 +147,315 @@ The [International Soil Carbon Network](http://iscn.fluxdata.org/) has made a gl
 
 ```{r soil data, error=FALSE}
 
-install_github("ISCN/SOCDRaHR2")
-library(SOCDRaH2)
-ISCNdownload <- ISCN3 #load function to download ISCN data
-ISCNdownload()
+#Github package for ISCN data - no longer supported
+#install_github("ISCN/SOCDRaHR2")
+#library(SOCDRaH2)
+#ISCN <- ISCN3() #download ISCN data
+
+#if/else loop for file download if the file isn't already downloaded
+if(file.exists('/ISCN.csv')){ #if a file exists in working directory
+		print('downloaded') #print result
+	} else{ #if it doesn't exist
+		download.file("https://pasta.lternet.edu/package/data/eml/edi/1160/1/4af719a84f8981fcc63f1f92760cb253", 
+		              destfile= "ISCN.csv") #download file from link and name it
+	} #end loop
+
+ISCN <- read.csv("ISCN.csv", header=F 
+          ,skip=1
+            ,sep=";"  
+                ,quot='"' 
+        , col.names=c(
+                    "ISCN.1.hyphen.1..paren.2015.hyphen.12.hyphen.10.paren.",     
+                    "dataset_name_sub",     
+                    "dataset_name_soc",     
+                    "lat..paren.dec..deg.paren.",     
+                    "long..paren.dec..deg.paren.",     
+                    "datum..paren.datum.paren.",     
+                    "state..paren.state_province.paren.",     
+                    "country..paren.country.paren.",     
+                    "site_name",     
+                    "observation_date..paren.YYYY.hyphen.MM.hyphen.DD.paren.",     
+                    "profile_name",     
+                    "layer_name",     
+                    "layer_top..paren.cm.paren.",     
+                    "layer_bot..paren.cm.paren.",     
+                    "hzn_desgn_other",     
+                    "hzn",     
+                    "hzn_desgn",     
+                    "layer_note",     
+                    "color",     
+                    "vegclass_local",     
+                    "soil_taxon",     
+                    "soil_series",     
+                    "bd_method",     
+                    "bd_samp..paren.g.cm.hyphen.3.paren.",     
+                    "bd_tot..paren.g.cm.hyphen.3.paren.",     
+                    "bd_whole..paren.g.cm.hyphen.3.paren.",     
+                    "bd_other..paren.g.cm.hyphen.3.paren.",     
+                    "bdNRCS_prep_code",     
+                    "cNRCS_prep_code",     
+                    "c_method",     
+                    "c_tot..paren.percent.paren.",     
+                    "oc..paren.percent.paren.",     
+                    "loi..paren.percent.paren.",     
+                    "n_tot..paren.percent.paren.",     
+                    "c_to_n..paren.mass.ratio.paren.",     
+                    "soc..paren.g.cm.hyphen.2.paren.",     
+                    "soc_carbon_flag",     
+                    "soc_method",     
+                    "ph_method",     
+                    "ph_cacl",     
+                    "ph_h2o",     
+                    "ph_other",     
+                    "caco3..paren.percent.paren.",     
+                    "sand_tot_psa..paren.percent.paren.",     
+                    "silt_tot_psa..paren.percent.paren.",     
+                    "clay_tot_psa..paren.percent.paren.",     
+                    "wpg2_method",     
+                    "wpg2..paren.percent.paren.",     
+                    "cat_exch..paren.cmol.H.plus..kg.hyphen.1.paren.",     
+                    "al_dith..paren.specified.by.al_fe_units.paren.",     
+                    "al_ox..paren.specified.by.al_fe_units.paren.",     
+                    "al_other..paren.specified.by.al_fe_units.paren.",     
+                    "fe_dith..paren.specified.by.al_fe_units.paren.",     
+                    "fe_ox..paren.specified.by.al_fe_units.paren.",     
+                    "fe_other..paren.specified.by.al_fe_units.paren.",     
+                    "mn_dith..paren.specified.by.al_fe_units.paren.",     
+                    "mn_ox..paren.specified.by.al_fe_units.paren.",     
+                    "mn_other..paren.specified.by.al_fe_units.paren.",     
+                    "al_fe_units..paren.extract_units.paren.",     
+                    "al_fe_method",     
+                    "ca_al..paren.specified.by.bc_units.paren.",     
+                    "ca_ext..paren.specified.by.bc_units.paren.",     
+                    "k_ext..paren.specified.by.bc_units.paren.",     
+                    "mg_ext..paren.specified.by.bc_units.paren.",     
+                    "na_ext..paren.specified.by.bc_units.paren.",     
+                    "bc_units..paren.extract_units.paren.",     
+                    "bc_method",     
+                    "base_sum..paren.specified.by.cec_h_units.paren.",     
+                    "cec_sum..paren.specified.by.cec_h_units.paren.",     
+                    "ecec..paren.specified.by.cec_h_units.paren.",     
+                    "cec_h_units..paren.extract_units.paren.",     
+                    "bs..paren.percent.paren.",     
+                    "bs_sum..paren.percent.paren.",     
+                    "h_ext..paren.specified.by.metal_ext_units.paren.",     
+                    "zn_ext..paren.specified.by.metal_ext_units.paren.",     
+                    "metal_ext_units..paren.extract_units.paren.",     
+                    "metal_ext_method",     
+                    "p_bray..paren.specified.by.p_units.paren.",     
+                    "p_ox..paren.specified.by.p_units.paren.",     
+                    "p_meh..paren.specified.by.p_units.paren.",     
+                    "p_other..paren.specified.by.p_units.paren.",     
+                    "p_units..paren.extract_units.paren.",     
+                    "p_method",     
+                    "root_quant_size",     
+                    "root_weight..paren.g.paren.",     
+                    "v_15n..paren.â°.paren.",     
+                    "v_13c..paren.â°.paren.",     
+                    "v_14c..paren.â°.paren.",     
+                    "v_14c_sigma..paren.â°.paren.",     
+                    "v_14c_age..paren.BP.paren.",     
+                    "v_14c_age_sigma..paren.BP.paren.",     
+                    "fraction_modern",     
+                    "fraction_modern_sigma",     
+                    "textureClass",     
+                    "locator_parent_alias"    ), check.names=TRUE)
+
+
+#fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+if (class(ISCN$lat..paren.dec..deg.paren.)!="factor") ISCN$lat..paren.dec..deg.paren.<- as.factor(ISCN$lat..paren.dec..deg.paren.)
+if (class(ISCN$long..paren.dec..deg.paren.)!="factor") ISCN$long..paren.dec..deg.paren.<- as.factor(ISCN$long..paren.dec..deg.paren.)
+if (class(ISCN$datum..paren.datum.paren.)!="factor") ISCN$datum..paren.datum.paren.<- as.factor(ISCN$datum..paren.datum.paren.)
+if (class(ISCN$layer_top..paren.cm.paren.)!="factor") ISCN$layer_top..paren.cm.paren.<- as.factor(ISCN$layer_top..paren.cm.paren.)
+if (class(ISCN$layer_bot..paren.cm.paren.)!="factor") ISCN$layer_bot..paren.cm.paren.<- as.factor(ISCN$layer_bot..paren.cm.paren.)
+if (class(ISCN$vegclass_local)!="factor") ISCN$vegclass_local<- as.factor(ISCN$vegclass_local)
+if (class(ISCN$soil_taxon)!="factor") ISCN$soil_taxon<- as.factor(ISCN$soil_taxon)
+if (class(ISCN$soil_series)!="factor") ISCN$soil_series<- as.factor(ISCN$soil_series)
+if (class(ISCN$bd_method)!="factor") ISCN$bd_method<- as.factor(ISCN$bd_method)
+if (class(ISCN$bd_samp..paren.g.cm.hyphen.3.paren.)!="factor") ISCN$bd_samp..paren.g.cm.hyphen.3.paren.<- as.factor(ISCN$bd_samp..paren.g.cm.hyphen.3.paren.)
+if (class(ISCN$bd_tot..paren.g.cm.hyphen.3.paren.)!="factor") ISCN$bd_tot..paren.g.cm.hyphen.3.paren.<- as.factor(ISCN$bd_tot..paren.g.cm.hyphen.3.paren.)
+if (class(ISCN$bd_whole..paren.g.cm.hyphen.3.paren.)!="factor") ISCN$bd_whole..paren.g.cm.hyphen.3.paren.<- as.factor(ISCN$bd_whole..paren.g.cm.hyphen.3.paren.)
+if (class(ISCN$bd_other..paren.g.cm.hyphen.3.paren.)!="factor") ISCN$bd_other..paren.g.cm.hyphen.3.paren.<- as.factor(ISCN$bd_other..paren.g.cm.hyphen.3.paren.)
+if (class(ISCN$c_method)!="factor") ISCN$c_method<- as.factor(ISCN$c_method)
+if (class(ISCN$c_tot..paren.percent.paren.)!="factor") ISCN$c_tot..paren.percent.paren.<- as.factor(ISCN$c_tot..paren.percent.paren.)
+if (class(ISCN$oc..paren.percent.paren.)!="factor") ISCN$oc..paren.percent.paren.<- as.factor(ISCN$oc..paren.percent.paren.)
+if (class(ISCN$loi..paren.percent.paren.)!="factor") ISCN$loi..paren.percent.paren.<- as.factor(ISCN$loi..paren.percent.paren.)
+if (class(ISCN$n_tot..paren.percent.paren.)!="factor") ISCN$n_tot..paren.percent.paren.<- as.factor(ISCN$n_tot..paren.percent.paren.)
+if (class(ISCN$c_to_n..paren.mass.ratio.paren.)!="factor") ISCN$c_to_n..paren.mass.ratio.paren.<- as.factor(ISCN$c_to_n..paren.mass.ratio.paren.)
+if (class(ISCN$soc..paren.g.cm.hyphen.2.paren.)!="factor") ISCN$soc..paren.g.cm.hyphen.2.paren.<- as.factor(ISCN$soc..paren.g.cm.hyphen.2.paren.)
+if (class(ISCN$soc_carbon_flag)!="factor") ISCN$soc_carbon_flag<- as.factor(ISCN$soc_carbon_flag)
+if (class(ISCN$soc_method)!="factor") ISCN$soc_method<- as.factor(ISCN$soc_method)
+if (class(ISCN$ph_method)!="factor") ISCN$ph_method<- as.factor(ISCN$ph_method)
+if (class(ISCN$ph_cacl)!="factor") ISCN$ph_cacl<- as.factor(ISCN$ph_cacl)
+if (class(ISCN$ph_h2o)!="factor") ISCN$ph_h2o<- as.factor(ISCN$ph_h2o)
+if (class(ISCN$ph_other)!="factor") ISCN$ph_other<- as.factor(ISCN$ph_other)
+if (class(ISCN$sand_tot_psa..paren.percent.paren.)!="factor") ISCN$sand_tot_psa..paren.percent.paren.<- as.factor(ISCN$sand_tot_psa..paren.percent.paren.)
+if (class(ISCN$silt_tot_psa..paren.percent.paren.)!="factor") ISCN$silt_tot_psa..paren.percent.paren.<- as.factor(ISCN$silt_tot_psa..paren.percent.paren.)
+if (class(ISCN$clay_tot_psa..paren.percent.paren.)!="factor") ISCN$clay_tot_psa..paren.percent.paren.<- as.factor(ISCN$clay_tot_psa..paren.percent.paren.)
+if (class(ISCN$root_quant_size)!="factor") ISCN$root_quant_size<- as.factor(ISCN$root_quant_size)
+if (class(ISCN$root_weight..paren.g.paren.)!="factor") ISCN$root_weight..paren.g.paren.<- as.factor(ISCN$root_weight..paren.g.paren.)
+if (class(ISCN$textureClass)!="factor") ISCN$textureClass<- as.factor(ISCN$textureClass)
+
+#data file 2
+#if/else loop for file download if the file isn't already downloaded
+if(file.exists('/ISCN_2.csv')){ #if a file exists in working directory
+		print('downloaded') #print result
+	} else{ #if it doesn't exist
+		download.file("https://pasta.lternet.edu/package/data/eml/edi/1160/1/40527580cc045d33d9a5aaf728bf204e", 
+		              destfile= "ISCN_2.csv") #download file from link and name it
+	} #end loop
+
+ISCN_2 <- read.csv("ISCN_2.csv", header=F 
+          ,skip=1
+            ,sep=";"  
+                ,quot='"' 
+        , col.names=c(
+                    "ISCN.1.hyphen.1..paren.2015.hyphen.12.hyphen.10.paren.",     
+                    "dataset_name_sub",     
+                    "dataset_name_soc",     
+                    "lat..paren.dec..deg.paren.",     
+                    "long..paren.dec..deg.paren.",     
+                    "datum..paren.datum.paren.",     
+                    "state..paren.state_province.paren.",     
+                    "country..paren.country.paren.",     
+                    "observation_date..paren.YYYY.hyphen.MM.hyphen.DD.paren.",     
+                    "site_name",     
+                    "profile_name",     
+                    "profile_zero_ref..paren.profile_zero_ref.paren.",     
+                    "layer_top..paren.cm.paren.",     
+                    "layer_bot..paren.cm.paren.",     
+                    "total_lcount",     
+                    "carbon_lcount",     
+                    "soc_lcount",     
+                    "soc_depth..paren.cm.paren.",     
+                    "soc..paren.g.cm.hyphen.2.paren.",     
+                    "soc_method",     
+                    "soc_spatial_flag",     
+                    "soc_carbon_flag",     
+                    "soil_taxon",     
+                    "soil_series",     
+                    "elevation..paren.m.paren.",     
+                    "ecoregion",     
+                    "landuse..paren.landsat.paren.",     
+                    "vegclass_local",     
+                    "surface_veg",     
+                    "landscape..paren.landscape.paren.",     
+                    "landform..paren.landform.paren.",     
+                    "v_2d_position..paren.2d_position.paren.",     
+                    "landform_note",     
+                    "aspect_deg..paren.degree.paren.",     
+                    "slope..paren.percent.paren.",     
+                    "drainagecl..paren.drainage.paren.",     
+                    "map..paren.mm.paren.",     
+                    "mat..paren.Â°C.paren.",     
+                    "runoff..paren.runoff.paren.",     
+                    "site_perm..paren.site_perm.paren.",     
+                    "site_note",     
+                    "thaw_depth_profile..paren.cm.paren.",     
+                    "locator_alias",     
+                    "locator_parent_alias"    ), check.names=TRUE)
+
+#fix any interval or ratio columns mistakenly read in as nominal and nominal columns read as numeric or dates read as strings
+if (class(ISCN_2$lat..paren.dec..deg.paren.)!="factor") ISCN_2$lat..paren.dec..deg.paren.<- as.factor(ISCN_2$lat..paren.dec..deg.paren.)
+if (class(ISCN_2$long..paren.dec..deg.paren.)!="factor") ISCN_2$long..paren.dec..deg.paren.<- as.factor(ISCN_2$long..paren.dec..deg.paren.)
+if (class(ISCN_2$datum..paren.datum.paren.)!="factor") ISCN_2$datum..paren.datum.paren.<- as.factor(ISCN_2$datum..paren.datum.paren.)
+if (class(ISCN_2$layer_top..paren.cm.paren.)!="factor") ISCN_2$layer_top..paren.cm.paren.<- as.factor(ISCN_2$layer_top..paren.cm.paren.)
+if (class(ISCN_2$layer_bot..paren.cm.paren.)!="factor") ISCN_2$layer_bot..paren.cm.paren.<- as.factor(ISCN_2$layer_bot..paren.cm.paren.)
+if (class(ISCN_2$total_lcount)!="factor") ISCN_2$total_lcount<- as.factor(ISCN_2$total_lcount)
+if (class(ISCN_2$carbon_lcount)!="factor") ISCN_2$carbon_lcount<- as.factor(ISCN_2$carbon_lcount)
+if (class(ISCN_2$soc_lcount)!="factor") ISCN_2$soc_lcount<- as.factor(ISCN_2$soc_lcount)
+if (class(ISCN_2$soc_depth..paren.cm.paren.)!="factor") ISCN_2$soc_depth..paren.cm.paren.<- as.factor(ISCN_2$soc_depth..paren.cm.paren.)
+if (class(ISCN_2$soc..paren.g.cm.hyphen.2.paren.)!="factor") ISCN_2$soc..paren.g.cm.hyphen.2.paren.<- as.factor(ISCN_2$soc..paren.g.cm.hyphen.2.paren.)
+if (class(ISCN_2$soc_method)!="factor") ISCN_2$soc_method<- as.factor(ISCN_2$soc_method)
+if (class(ISCN_2$soc_spatial_flag)!="factor") ISCN_2$soc_spatial_flag<- as.factor(ISCN_2$soc_spatial_flag)
+if (class(ISCN_2$soc_carbon_flag)!="factor") ISCN_2$soc_carbon_flag<- as.factor(ISCN_2$soc_carbon_flag)
+if (class(ISCN_2$soil_taxon)!="factor") ISCN_2$soil_taxon<- as.factor(ISCN_2$soil_taxon)
+if (class(ISCN_2$soil_series)!="factor") ISCN_2$soil_series<- as.factor(ISCN_2$soil_series)
+if (class(ISCN_2$elevation..paren.m.paren.)!="factor") ISCN_2$elevation..paren.m.paren.<- as.factor(ISCN_2$elevation..paren.m.paren.)
+if (class(ISCN_2$ecoregion)!="factor") ISCN_2$ecoregion<- as.factor(ISCN_2$ecoregion)
+if (class(ISCN_2$landuse..paren.landsat.paren.)!="factor") ISCN_2$landuse..paren.landsat.paren.<- as.factor(ISCN_2$landuse..paren.landsat.paren.)
+if (class(ISCN_2$vegclass_local)!="factor") ISCN_2$vegclass_local<- as.factor(ISCN_2$vegclass_local)
+if (class(ISCN_2$surface_veg)!="factor") ISCN_2$surface_veg<- as.factor(ISCN_2$surface_veg)
+if (class(ISCN_2$landscape..paren.landscape.paren.)!="factor") ISCN_2$landscape..paren.landscape.paren.<- as.factor(ISCN_2$landscape..paren.landscape.paren.)
+if (class(ISCN_2$landform..paren.landform.paren.)!="factor") ISCN_2$landform..paren.landform.paren.<- as.factor(ISCN_2$landform..paren.landform.paren.)
+if (class(ISCN_2$map..paren.mm.paren.)!="factor") ISCN_2$map..paren.mm.paren.<- as.factor(ISCN_2$map..paren.mm.paren.)
+#if (class(ISCN_2$mat..paren.Â°C.paren.)!="factor") ISCN_2$mat..paren.Â°C.paren.<- as.factor(ISCN_2$mat..paren.Â°C.paren.)
+if (class(ISCN_2$locator_alias)!="factor") ISCN_2$locator_alias<- as.factor(ISCN_2$locator_alias)
+if (class(ISCN_2$locator_parent_alias)!="factor") ISCN_2$locator_parent_alias<- as.factor(ISCN_2$locator_parent_alias)
+
+#data file 3
+#if/else loop for file download if the file isn't already downloaded
+if(file.exists('/ISCN_3.csv')){ #if a file exists in working directory
+		print('downloaded') #print result
+	} else{ #if it doesn't exist
+		download.file("https://pasta.lternet.edu/package/data/eml/edi/1160/1/320e31ca911f187550ca2143c31fd408", 
+		              destfile= "ISCN_3.csv") #download file from link and name it
+	} #end loop
+
+ISCN_3 <-read.csv("ISCN_3.csv", header=F 
+          ,skip=1
+            ,sep=";"  
+                ,quot='"' 
+        , col.names=c(
+                    "ISCN.1.hyphen.1..paren.2015.hyphen.12.hyphen.10.paren.",     
+                    "dataset_name",     
+                    "dataset_type..paren.dataset_type.paren.",     
+                    "curator_name",     
+                    "curator_organization",     
+                    "curator_email",     
+                    "reference",     
+                    "citation",     
+                    "citation_usage",     
+                    "acknowledgement",     
+                    "acknowledgement_usage",     
+                    "modification_date..paren.YYYY.hyphen.MM.hyphen.DD.paren."    ), check.names=TRUE)
+		    
+
+#data file 4
+#if/else loop for file download if the file isn't already downloaded
+if(file.exists('/ISCN_4.csv')){ #if a file exists in working directory
+		print('downloaded') #print result
+	} else{ #if it doesn't exist
+		download.file("https://pasta.lternet.edu/package/data/eml/edi/1160/1/cdd0c7a4cac3f28d6d788c91f506775f", 
+		              destfile= "ISCN_4.csv") #download file from link and name it
+	} #end loop
+
+ISCN_4 <-read.csv("ISCN_4.csv", header=F 
+          ,skip=1
+            ,sep=";"  
+                ,quot='"' 
+        , col.names=c(
+                    "ISCN.1.hyphen.1..paren.2015.hyphen.12.hyphen.10.paren.",     
+                    "dataset_name",     
+                    "dataset_type..paren.dataset_type.paren.",     
+                    "curator_name",     
+                    "curator_organization",     
+                    "curator_email",     
+                    "contact_name",     
+                    "contact_email",     
+                    "dataset_description",     
+                    "total_scount",     
+                    "total_pcount",     
+                    "total_lcount",     
+                    "soc_scount",     
+                    "soc_pcount",     
+                    "soc_lcount",     
+                    "soc_scount_ISCN",     
+                    "soc_pcount_ISCN",     
+                    "soc_lcount_ISCN",     
+                    "modification_date..paren.YYYY.hyphen.MM.hyphen.DD.paren."    ), check.names=TRUE)
+
+#look at data structure
+str(ISCN) #structure
+
+
+#select only usable data
+soil_df <- ISCN[, c(3:6, 20, 24, 26, 32, 36, 37, 41, 44:46)] %>% #dataset name, lat/long, vegclass, BDs, SOC, pH, sand/silt/clay
+  filter(bd_whole..paren.g.cm.hyphen.3.paren. != "NA") %>% #filter out NA values
+  mutate(BD = case_when(bd_samp..paren.g.cm.hyphen.3.paren. != "NA" ~ bd_samp..paren.g.cm.hyphen.3.paren., #use bd_samp if it's not 0
+            TRUE ~ bd_whole..paren.g.cm.hyphen.3.paren.)) #otherwise use bd_whole
+  mutate(across(c(8,9,11:13), as.numeric)) #convert columns to numeric
+
 
 ```
 
@@ -160,7 +519,7 @@ coverC2 <- rbind(coverC2, trfAM)
 
 ### Soil Organic Matter Fractions
 
-To estimate how much C is stored in particulate organic matter (POM) or mineral-associated organic matter (MAOM) fractions across biomes globally, I used data from [Georgiou et al. 2022](https://www.nature.com/articles/s41467-022-31540-9). The top 30cm was selected to compare topsoil, and was scaled up 
+To estimate how much C is stored in particulate organic matter (POM) or mineral-associated organic matter (MAOM) fractions across biomes globally, I used data from [Georgiou et al. 2022](https://www.nature.com/articles/s41467-022-31540-9). The top 30cm was selected to compare topsoil, and was scaled up to the area of global cover.
 
 ```{r SOM C data}
 
@@ -191,14 +550,51 @@ Ctop30means <- coverC_top30 %>%
 
 
 
-#write_csv(coverC3, "Cpools.csv")
-#write_csv(Cpoolmeans, "Cpoolmeans.csv")
+write_csv(coverC_top30, "Cpools30cm.csv")
+write_csv(Ctop30means, "Cpoolmeans30cm.csv")
+
+install.packages("gt")
+library(gt)
+
+C_table <- Ctop30means[, c(1:6,10:12)]
+
+C_table <- C_table %>%
+  column_to_rownames(var = "Ecosystem") %>%
+  signif(., 4) #round to 4 significant figures
+
+gt(C_table, 
+   rownames_to_stub=TRUE)
+
+```
+
+## Plots
+
+```{r plot AM bio}
+
+#bar chart AM biomass C
+ggplot(coverC_top30, aes(x=Ecosystem, y=AMbio_C, fill=Ecosystem)) + 
+    geom_bar(position="dodge", stat = "identity", width = 0.7, colour="black") + #add proportion bars with black outline
+    scale_x_discrete(guide = guide_axis(angle = 45)) +
+    scale_fill_manual(values = wes_palette("Zissou1")) + #call from wesanderson library
+    theme_few() #remove grid, white background, box around plot - from ggthemes
 
 ```
 
 
-```{r}
+```{r plot AM allocation}
 
+#bar chart AM allocation C
+ggplot(coverC_top30, aes(x=Ecosystem, y=Allo_C, fill=Ecosystem)) + 
+    geom_boxplot(aes(group=Ecosystem, value=Allo_C)) + #add proportion bars with black outline
+    scale_x_discrete(guide = guide_axis(angle = 45)) +
+    scale_fill_manual(values = wes_palette("Zissou1")) + #call from wesanderson library
+    theme_few() #remove grid, white background, box around plot - from ggthemes
 
 ```
+
+
+## References
+
+
+Nave, L., K. Johnson, C. van Ingen, D. Agarwal, M. Humphrey, and N. Beekwilder. 2022. International Soil Carbon Network version 3 Database (ISCN3) ver 1. Environmental Data Initiative. https://doi.org/10.6073/pasta/cc751923c5576b95a6d6a227d5afe8ba
 
