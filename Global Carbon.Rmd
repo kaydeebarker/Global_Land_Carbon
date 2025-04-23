@@ -21,6 +21,7 @@ library(readr) #read files
 library(tidyverse) #Tidy packages
 library(dplyr)
 library(sf) #Spatial package that can read and create shapefiles 
+library(terra) #Raster package
 library(ggplot2) #Pretty plots
 library(devtools) #install packages
 library(RColorBrewer)
@@ -63,21 +64,64 @@ file.remove("Ecoregions2017.zip")}
 
 ecoregions <- st_read("Ecoregions2017.shp")
 
-library(foreign)
-ecoregions_df <- read.dbf("Ecoregions2017.dbf")
-
 #Calculate area of each ecoregion into sq km
 st_crs(ecoregions) #check coordinate system
 ecoregions <- st_make_valid(ecoregions) #fix invalid geometries
 
 #Transform to a projected CRS (e.g., UTM) for accurate area calculations
 #Replace EPSG:4326 with planar CRS (e.g., EPSG:3395 for World Mercator)
-projected_ecoregions <- st_transform(ecoregions, crs = 3395) # EPSG:3395 for World Mercator
+ecoregions_area <- st_transform(ecoregions, crs = 3395) # EPSG:3395 for World Mercator
 
 #Calculate area in square meters and convert to square kilometers
-projected_ecoregions$area_sq_m <- st_area(projected_ecoregions)
-projected_ecoregions$area_sq_km <- as.numeric(projected_ecoregions$area_sq_m) / 1e6
+ecoregions_area$area_sq_m <- st_area(ecoregions_area)
+ecoregions_area$area_sq_km <- as.numeric(ecoregions_area$area_sq_m) / 1e6
 
+Steidinger <- read.csv('AM_EM_proportions.csv') #read in data for AM proportions
+
+#Create new column with more specific ecoregion names
+#case when function from dplyr to define values in a new column based on conditions - with substrings
+ecoregions_area <- ecoregions_area %>%
+  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km) %>% #select only relevant columns
+  filter(BIOME_NAME != "Boreal Forests/Taiga") %>% #filter out Boreal Forests
+  filter(!grepl("Desert", ECO_NAME, ignore.case = TRUE)) %>% #filter out deserts))
+  mutate(biome = #define biomes more closely
+           case_when(grepl("Temperate", BIOME_NAME) & #use grepl to find a substring
+													 grepl("Grassland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", #set value in new column 
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Steppe", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands",  
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Shrub", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Shrublands", 
+													 grepl("Tropical", BIOME_NAME) & #use grepl to find a substring
+													 grepl("Grassland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical Grasslands", #set value in new column 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Savanna", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical Savannas",  
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("miombo", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical Savannas",  
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("mopane", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical Savannas", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Shrub", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical Shrublands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("puna", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Grasslands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("Grassland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Grasslands", 
+													 grepl("Deserts & Xeric Shrublands", BIOME_NAME)
+													     ~ "Xeric Shrublands",
+		                           .default = BIOME_NAME)) %>% #set default value of new column
+  mutate(AM_area = #multiply by proportion of AM
+           case_when(grepl("Tundra", biome, ignore.case = TRUE),
+                     ~ (area_sq_km*((Steidinger$median[Steidinger$group_id == "Tundra_AM"])/100)),
+            .default = area_sq_km))
 
 #Split out and add ecosystems based on proportion - data from FAO 2020, Dinerstein et al. 2017, Steidinger et al. 2019 for AM vs. EcM ratio in forests
 
