@@ -25,7 +25,17 @@ library(terra) #Raster package
 
 ## Ecosystem Cover Data
 
-Biomes containing arbuscular mycorrhizal (AM) fungi include croplands, temperate grasslands, savannas and shrublands (i.e. tropical grasslands), temperate forests, and tropical forests. I used data from the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)) and proportions from [Dinerstein et al. 2017](https://doi.org/10.1093/biosci/bix014) to determine total area in square kilometers for each biome, Then used data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the proportion of AM vs. ectomycorrhizal (EcM) fungal trees.
+Biomes containing arbuscular mycorrhizal (AM) fungi include croplands, temperate grasslands, savannas and shrublands (i.e. tropical grasslands), temperate forests, and tropical forests. 
+
+I used data from the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)) and [Ecoregions2017](https://developers.google.com/earth-engine/datasets/catalog/RESOLVE_ECOREGIONS_2017) to determine total area in square kilometers for each biome. 
+
+OneEarth: https://www.oneearth.org/
+
+I used data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the proportion of AM vs. ectomycorrhizal (EcM) fungal trees. 
+
+I used a grass:tree ratio of 3.56 for savannas, converted to area of 78% grass, 22% tree, before applying the AM to EcM rate for trees ([Belovitch et al. 2023](https://doi.org/10.1111/nph.18909))
+
+croplands
 
 ```{r load cover data, eval=FALSE}
 
@@ -41,9 +51,9 @@ biomes <- rast("glc_shv10_DOM.Tif")
 
 #Make df of frequency of each value in raster
 landcover <- as.data.frame(freq(biomes)) %>%
-  rename("Area" = "count") 
+  rename("area_sq_km" = "count") 
 
-landcover$Ecosystem <- c("Null", "Artificial", "Cropland", "Grassland", "Tree Covered", "Shrubland", "Herbaceous Wetland", "Mangrove", "Sparse Veg", "Bare Soil", "Snow & Glaciers", "Water")
+landcover$biome <- c("Null", "Artificial", "Cropland", "Grassland", "Tree Covered", "Shrubland", "Herbaceous Wetland", "Mangrove", "Sparse Veg", "Bare Soil", "Snow & Glaciers", "Water")
 
 #Download total land cover map from EcoRegions2017 if not downloaded already
 if(file.exists('/Ecoregions2017.shp')){
@@ -70,35 +80,58 @@ ecoregions_area <- st_transform(ecoregions, crs = 3395) # EPSG:3395 for World Me
 ecoregions_area$area_sq_m <- st_area(ecoregions_area)
 ecoregions_area$area_sq_km <- as.numeric(ecoregions_area$area_sq_m) / 1e6
 
-write.csv(ecoregions_area, "ecoregions_area.csv") #save as csv to save time on loading
+#Convert into data frame
+ecoregions_area <- as.data.frame(ecoregions_area)
+
+#write.csv(ecoregions_area, "ecoregions_area.csv") #save as csv to save time on loading
+#ecoregions_area <- read.csv("ecoregions_area.csv") #read in data
 
 ```
 
 ```{r clean ecoregions data}
 
-ecoregions_area <- read.csv("ecoregions_area.csv") #read in data
-
-Steidinger <- read.csv('AM_EM_proportions.csv') #read in data for AM proportions
+Steidinger <- read.csv('AM_EM_proportions.csv') #read in data for myc proportions
 
 #Create new column with more specific ecoregion names
 ecoregions_area <- ecoregions_area %>%
   dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km) %>% #select only relevant columns
   na.omit() %>%
-  filter(!grepl("Desert", ECO_NAME, ignore.case = TRUE)) %>% #filter out deserts)) 
+  filter(!grepl("Desert", ECO_NAME, ignore.case = TRUE)) %>% #filter out deserts
+  filter(!grepl("Rock and Ice", ECO_NAME, ignore.case = TRUE)) %>% #filter out rock and ice
   mutate(across('BIOME_NAME', str_replace, 'Mediterranean Forests, Woodlands & Scrub', 'Mediterranean Forests')) %>%
   mutate(biome = #define biomes more closely
            case_when(grepl("Temperate", BIOME_NAME) & #use grepl to find a substring
-													 grepl("Grassland", ECO_NAME, ignore.case = TRUE)
+													 grepl("Grass", ECO_NAME, ignore.case = TRUE)
 															 ~ "Temperate Grasslands", #set value in new column 
 													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("prairie", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", 
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Espinal", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", 
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Pampas", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", 
+													 grepl("Temperate Grasslands, Savannas & Shrublands", BIOME_NAME) & 
 													 grepl("Steppe", ECO_NAME, ignore.case = TRUE)
 															 ~ "Temperate Grasslands",  
+													 grepl("Temperate Grasslands, Savannas & Shrublands", BIOME_NAME) & 
+													 grepl("woodland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Shrublands",  
 													 grepl("Temperate", BIOME_NAME) & 
 													 grepl("Shrub", ECO_NAME, ignore.case = TRUE)
 															 ~ "Temperate Shrublands", 
-													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Low Monte", ECO_NAME, ignore.case = TRUE)
+													     ~ "Temperate Shrublands",
+													 grepl("Temperate Grasslands, Savannas & Shrublands", BIOME_NAME) & 
 													 grepl("Savanna", ECO_NAME, ignore.case = TRUE)
 															 ~ "Temperate Savannas", 
+													 grepl("Flooded", BIOME_NAME) & 
+													 grepl("Savanna", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Savannas", 
+													 grepl("Temperate", BIOME_NAME) &
+													 grepl("Aspen", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Broadleaf & Mixed Forests",
 													 grepl("Mediterranean", BIOME_NAME) & 
 													 grepl("chaparral", ECO_NAME, ignore.case = TRUE)
 															 ~ "Xeric Shrublands", 
@@ -112,23 +145,41 @@ ecoregions_area <- ecoregions_area %>%
 													 grepl("mixed", ECO_NAME, ignore.case = TRUE)
 															 ~ "Temperate Broadleaf & Mixed Forests", 
 													 grepl("Tropical", BIOME_NAME) & 
-													 grepl("Grassland", ECO_NAME, ignore.case = TRUE)
-															 ~ "Tropical Grasslands", 
+													 grepl("Grass", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Grasslands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Chaco", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Grasslands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("lowveld", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Grasslands", 
 													 grepl("Tropical", BIOME_NAME) & 
 													 grepl("Savanna", ECO_NAME, ignore.case = TRUE)
-															 ~ "Tropical Savannas",  
+															 ~ "Tropical & Subtropical Savannas",  
 													 grepl("Tropical", BIOME_NAME) & 
-													 grepl("miombo", ECO_NAME, ignore.case = TRUE)
-															 ~ "Tropical Savannas",  
+													 grepl("Cerrado", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas", 
 													 grepl("Tropical", BIOME_NAME) & 
-													 grepl("mopane", ECO_NAME, ignore.case = TRUE)
-															 ~ "Tropical Savannas", 
+													 grepl("Llanos", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas", 
+													 grepl("Tropical & Subtropical Grasslands", BIOME_NAME) &
+													 grepl("woodland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas",
+													 grepl("Tropical & Subtropical Grasslands", BIOME_NAME) &
+													 grepl("thicket", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas",
 													 grepl("Tropical", BIOME_NAME) & 
 													 grepl("Shrub", ECO_NAME, ignore.case = TRUE)
-															 ~ "Tropical Shrublands", 
+															 ~ "Tropical & Subtropical Shrublands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("scrub", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Shrublands", 
 													 grepl("Tropical", BIOME_NAME) & 
 													 grepl("bush", ECO_NAME, ignore.case = TRUE)
-															 ~ "Tropical Shrublands", 
+															 ~ "Tropical & Subtropical Shrublands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("pine", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Coniferous Forests", 
 													 grepl("Montane", BIOME_NAME) & 
 													 grepl("puna", ECO_NAME, ignore.case = TRUE)
 															 ~ "Montane Grasslands", 
@@ -147,12 +198,26 @@ ecoregions_area <- ecoregions_area %>%
 													 grepl("Montane", BIOME_NAME) & 
 													 grepl("moorland", ECO_NAME, ignore.case = TRUE)
 															 ~ "Montane Shrublands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("thicket", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Shrublands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("woodland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Shrublands", 
+													 grepl("High Monte", ECO_NAME, ignore.case = TRUE)
+													     ~ "Montane Shrublands",
+													 grepl("mangrove", ECO_NAME, ignore.case = TRUE)
+															 ~ "Mangroves", 
 													 grepl("Deserts & Xeric Shrublands", BIOME_NAME)
 													     ~ "Xeric Shrublands",
+													 grepl("Flooded Grasslands & Savannas", BIOME_NAME)
+													     ~ "Flooded Grasslands",
 		                           .default = BIOME_NAME)) #set default value
+
 
 #Create column with area adjusted to AM proportions
 ecoregions_area <- ecoregions_area %>%
+  bind_rows(landcover[3,]) %>% #bind rows of landcover to ecoregions
   mutate(AM_area = #multiply by proportion of AM
            case_when(biome == "Tundra"
                      ~ (area_sq_km*((Steidinger$median[
@@ -164,24 +229,30 @@ ecoregions_area <- ecoregions_area %>%
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Temp_conifer_AM"])/100)),
                      biome == "Temperate Savannas"
-                     ~ (area_sq_km*((Steidinger$median[
-                       Steidinger$group_id == "Temp_savannah_AM"])/100)),
+                     ~ ((area_sq_km*0.78)+(area_sq_km*0.22*((Steidinger$median[
+                       Steidinger$group_id == "Temp_savannah_AM"])/100))),
                      biome == "Tropical & Subtropical Moist Broadleaf Forests"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Wet_trop_broadleaf_AM"])/100)),
                      biome == "Tropical & Subtropical Dry Broadleaf Forests"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Dry_trop_broadleaf_AM"])/100)),
-                     biome == "Tropical Conifer Forests"
+                     biome == "Tropical & Subtropical Coniferous Forests"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Trop_conifer_AM"])/100)),
-                     biome == "Tropical Savannas"
+                     biome == "Tropical & Subtropical Savannas"
+                     ~ ((area_sq_km*0.78)+(area_sq_km*0.22*((Steidinger$median[
+                       Steidinger$group_id == "Trop_savannah_AM"])/100))),
+                     biome == "Tropical & Subtropical Shrublands"
                      ~ (area_sq_km*((Steidinger$median[
-                       Steidinger$group_id == "Trop_savannah_AM"])/100)),
+                       Steidinger$group_id == "Xeric_shrub_EM"])/100)),
                      biome == "Montane Shrublands"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Montane_shrub_AM"])/100)),
                      biome == "Xeric Shrublands"
+                     ~ (area_sq_km*((Steidinger$median[
+                       Steidinger$group_id == "Xeric_shrub_AM"])/100)),
+                     biome == "Temperate Shrublands"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Xeric_shrub_AM"])/100)),
                      biome == "Mediterranean Forests"
@@ -201,7 +272,7 @@ ecoregions_area <- ecoregions_area %>%
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Temp_conifer_EM"])/100)),
                      biome == "Temperate Savannas"
-                     ~ (area_sq_km*((Steidinger$median[
+                     ~ (area_sq_km*0.22*((Steidinger$median[
                        Steidinger$group_id == "Temp_savannah_EM"])/100)),
                      biome == "Tropical & Subtropical Moist Broadleaf Forests"
                      ~ (area_sq_km*((Steidinger$median[
@@ -209,16 +280,22 @@ ecoregions_area <- ecoregions_area %>%
                      biome == "Tropical & Subtropical Dry Broadleaf Forests"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Dry_trop_broadleaf_EM"])/100)),
-                     biome == "Tropical Conifer Forests"
+                     biome == "Tropical & Subtropical Coniferous Forests"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Trop_conifer_EM"])/100)),
-                     biome == "Tropical Savannas"
-                     ~ (area_sq_km*((Steidinger$median[
+                     biome == "Tropical & Subtropical Savannas"
+                     ~ (area_sq_km*0.22*((Steidinger$median[
                        Steidinger$group_id == "Trop_savannah_EM"])/100)),
+                     biome == "Tropical & Subtropical Shrublands"
+                     ~ (area_sq_km*((Steidinger$median[
+                       Steidinger$group_id == "Xeric_shrub_EM"])/100)),
                      biome == "Montane Shrublands"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Montane_shrub_EM"])/100)),
                      biome == "Xeric Shrublands"
+                     ~ (area_sq_km*((Steidinger$median[
+                       Steidinger$group_id == "Xeric_shrub_EM"])/100)),
+                     biome == "Temperate Shrublands"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Xeric_shrub_EM"])/100)),
                      biome == "Mediterranean Forests"
@@ -228,71 +305,22 @@ ecoregions_area <- ecoregions_area %>%
                      ~ 0,
                      biome == "Tropical Grasslands"
                      ~ 0,
+                     biome == "Flooded Grasslands"
+                     ~ 0,
+                     biome == "Montane Grasslands"
+                     ~ 0,
+                     biome == "Mangroves"
+                     ~ 0,
+                     biome == "Cropland"
+                     ~ 0,
             .default = area_sq_km))
 
 ecoregions_sum <- ecoregions_area %>%
   group_by(biome) %>% #group by biome
-  mutate(total_area = area_sq_km) %>%
-  select(biome, total_area) %>% #select only relevant columns
-  summarize(total_area = sum(total_area, na.rm = TRUE)) %>%
+  select(biome, area_sq_km, AM_area, EM_area) %>% #select only relevant columns
+  summarise_at(c("area_sq_km", "AM_area", "EM_area"), sum, na.rm = TRUE) #%>%
 
-#Split out and add ecosystems based on proportion - data from FAO 2020, Dinerstein et al. 2017, Steidinger et al. 2019 for AM vs. EcM ratio in forests
-
-#Proportions data
-Dinerstein <- data.frame(
-  Biome = c("1. Tropical and subtropical moist broadleaf forests", "2. Tropical and subtropical dry broadleaf forests", "3. Tropical and subtropical coniferous forests", "4. Temperate broadleaf and mixed forests", "5. Temperate conifer forests", "6. Boreal forests or taiga", "14. Mangroves", "Forested subtotal", "7. Tropical grasslands, savannas, and shrublands", "8. Temperate grasslands, savannas, and shrublands", "9. Flooded grasslands and savannas", "10. Montane grasslands and shrublands", "11. Tundra", "12. Mediterranean forests, woodlands, and scrub", "13. Desert and xeric shrublands", "Nonforested subtotal"),
-  Percent = c(14.4, 2.9, 0.5, 9.3, 2.8, 11.4, 0.2, 41.3, 15.8, 7.8, 0.9, 3.6, 8.7, 2.4, 19.3, 58.5)
-)
-Steidinger <- read.csv('AM_EM_proportions.csv') #read in data
-
-#Tropical and subtropical forests
-tropfor <- data.frame(1,12,
-            landcover$Area[landcover$Ecosystem == "Tree Covered"]*
-              ((Dinerstein$Percent[Dinerstein$Biome == "1. Tropical and subtropical moist broadleaf forests"]*(Steidinger$median[Steidinger$group_id == "Wet_trop_broadleaf_AM"])/100) +
-                 (Dinerstein$Percent[Dinerstein$Biome == "2. Tropical and subtropical dry broadleaf forests"]*(Steidinger$median[Steidinger$group_id == "Dry_trop_broadleaf_AM"])/100) +
-              (Dinerstein$Percent[Dinerstein$Biome == "3. Tropical and subtropical coniferous forests"]*(Steidinger$median[Steidinger$group_id == "Trop_conifer_AM"])/100)) /
-                 Dinerstein$Percent[Dinerstein$Biome == "Forested subtotal"],
-            "Tropical Forest")
-names(tropfor) <- c("layer","value","Area","Ecosystem")
-landcover <- rbind(landcover, tropfor)
-
-#Temperate forests
-tempfor <- data.frame(1,13,landcover$Area[landcover$Ecosystem == "Tree Covered"]*
-          ((Dinerstein$Percent[Dinerstein$Biome == "4. Temperate broadleaf and mixed forests"]*(Steidinger$median[Steidinger$group_id == "Temp_mixed_AM"])/100) +
-            (Dinerstein$Percent[Dinerstein$Biome == "5. Temperate conifer forests"]*(Steidinger$median[Steidinger$group_id == "Temp_conifer_AM"])/100)) /
-            Dinerstein$Percent[Dinerstein$Biome == "Forested subtotal"],
-                      "Temperate Forest")
-names(tempfor) <- c("layer","value","Area","Ecosystem")
-landcover <- rbind(landcover, tempfor)
-
-#Temperate grasslands
-tempgr <- data.frame(1,14,
-                     (landcover$Area[landcover$Ecosystem == "Grassland"] + 
-                        landcover$Area[landcover$Ecosystem == "Shrubland"]) *
-                      ((Dinerstein$Percent[Dinerstein$Biome == "8. Temperate grasslands, savannas, and shrublands"]*((Steidinger$median[Steidinger$group_id == "Temp_savannah_AM"] + Steidinger$median[Steidinger$group_id == "Xeric_shrub_AM"] + 85)/3)/100)) /
-                        Dinerstein$Percent[Dinerstein$Biome == "Nonforested subtotal"],
-                     "Temperate Grassland, Shrubland, and Savanna")
-names(tempgr) <- c("layer","value","Area","Ecosystem")
-landcover <- rbind(landcover, tempgr)
-
-#Savannas - based on Dinerstein et al. 2017, plus shrub
-savshrub <- data.frame(1,15,
-                       (33129685*0.67)+18337497, "Savanna & Shrubland")
-names(savshrub) <- c("layer","value","Area","Ecosystem")
-landcover <- rbind(landcover, savshrub)
-
-AMcover <- landcover[,c(3,4)] %>%
-  filter(Ecosystem != "Null") %>% # filters out
-  filter(Ecosystem != "Artificial") %>%
-  filter(Ecosystem != "Grasslands") %>%
-  filter(Ecosystem != "Tree Covered") %>%
-  filter(Ecosystem != "Shrublands") %>%
-  filter(Ecosystem != "Herbaceous Wetlands") %>%
-  filter(Ecosystem != "Mangroves") %>%
-  filter(Ecosystem != "Sparse Veg") %>%
-  filter(Ecosystem != "Bare Soil") %>%
-  filter(Ecosystem != "Snow & Glaciers") %>%
-  filter(Ecosystem != "Water")
+write.csv(ecoregions_sum, "ecoregions_sum.csv") #save as csv to save time on loading
 
 ```
 
