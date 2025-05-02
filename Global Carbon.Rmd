@@ -20,6 +20,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse) #Tidy packages
 library(sf) #Spatial package that can read and create shapefiles 
 library(terra) #Raster package
+library(ggsci) #Color palettes based on scientific journals, data viz libraries, sci fi
 
 ```
 
@@ -29,13 +30,9 @@ Biomes containing arbuscular mycorrhizal (AM) fungi include croplands, temperate
 
 I used data from the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)) and [Ecoregions2017](https://developers.google.com/earth-engine/datasets/catalog/RESOLVE_ECOREGIONS_2017) to determine total area in square kilometers for each biome. 
 
-OneEarth: https://www.oneearth.org/
+I used median AM and ectomycorrhizal (EcM) fungal tree and shrub data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the area of each biome that might contain each mycorrhizal type. For tundras, I considered 49% to be herbaceous and 37% shrub cover, with the remaining barren ([Walker et al. 2005](https://onlinelibrary.wiley.com/doi/10.1111/j.1654-1103.2005.tb02365.x)).
+For savannas, I used a grass:tree ratio of 3.56 ([Belovitch et al. 2023](https://doi.org/10.1111/nph.18909)) and converted this to 78% grass cover and 22% tree cover before applying the AM to EcM proportion for trees. 
 
-I used data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the proportion of AM vs. ectomycorrhizal (EcM) fungal trees. 
-
-I used a grass:tree ratio of 3.56 for savannas, converted to area of 78% grass, 22% tree, before applying the AM to EcM rate for trees ([Belovitch et al. 2023](https://doi.org/10.1111/nph.18909))
-
-croplands
 
 ```{r load cover data, eval=FALSE}
 
@@ -220,8 +217,8 @@ ecoregions_area <- ecoregions_area %>%
   bind_rows(landcover[3,]) %>% #bind rows of landcover to ecoregions
   mutate(AM_area = #multiply by proportion of AM
            case_when(biome == "Tundra"
-                     ~ (area_sq_km*((Steidinger$median[
-                       Steidinger$group_id == "Tundra_AM"])/100)),
+                     ~ ((area_sq_km*0.49)+(area_sq_km*0.37*((Steidinger$median[
+                       Steidinger$group_id == "Tundra_AM"])/100))),
                      biome == "Temperate Broadleaf & Mixed Forests"
                      ~ (area_sq_km*((Steidinger$median[
                        Steidinger$group_id == "Temp_mixed_AM"])/100)),
@@ -261,9 +258,9 @@ ecoregions_area <- ecoregions_area %>%
                      biome == "Boreal Forests/Taiga"
                      ~ 0,
             .default = area_sq_km)) %>%
-  mutate(EM_area = #multiply by proportion of AM
+  mutate(EcM_area = #multiply by proportion of AM
            case_when(biome == "Tundra"
-                     ~ (area_sq_km*((Steidinger$median[
+                     ~ (area_sq_km*0.37*((Steidinger$median[
                        Steidinger$group_id == "Tundra_EM"])/100)),
                      biome == "Temperate Broadleaf & Mixed Forests"
                      ~ (area_sq_km*((Steidinger$median[
@@ -317,16 +314,23 @@ ecoregions_area <- ecoregions_area %>%
 
 ecoregions_sum <- ecoregions_area %>%
   group_by(biome) %>% #group by biome
-  select(biome, area_sq_km, AM_area, EM_area) %>% #select only relevant columns
-  summarise_at(c("area_sq_km", "AM_area", "EM_area"), sum, na.rm = TRUE) #%>%
+  select(biome, area_sq_km, AM_area, EcM_area) %>% #select only relevant columns
+  summarise_at(c("area_sq_km", "AM_area", "EcM_area"), sum, na.rm = TRUE) #%>%
 
 write.csv(ecoregions_sum, "ecoregions_sum.csv") #save as csv to save time on loading
+
+ecoregions_sum <- read.csv("ecoregions_sum.csv") #read in data
+
+AM_cover <- ecoregions_sum %>%
+  filter(AM_area > 0) #remove 0 values
 
 ```
 
 ## Carbon Data
 
 ### Soil Data
+
+#### International Soil Carbon Network Data
 
 The [International Soil Carbon Network](http://iscn.fluxdata.org/) has made a global dataset of soil characteristics available for public use ([Nave et al. 2016](https://www.osti.gov/biblio/1305039)).
 
@@ -481,6 +485,19 @@ if (class(ISCN$root_quant_size)!="factor") ISCN$root_quant_size<- as.factor(ISCN
 if (class(ISCN$root_weight..paren.g.paren.)!="factor") ISCN$root_weight..paren.g.paren.<- as.factor(ISCN$root_weight..paren.g.paren.)
 if (class(ISCN$textureClass)!="factor") ISCN$textureClass<- as.factor(ISCN$textureClass)
 
+#look at data structure
+str(ISCN) #structure
+
+
+#select only usable data
+soil_df <- ISCN[, c(3:6, 20, 24, 26, 32, 36, 37, 41, 44:46)] %>% #dataset name, lat/long, vegclass, BDs, SOC, pH, sand/silt/clay
+  filter(bd_whole..paren.g.cm.hyphen.3.paren. != "NA") %>% #filter out NA values
+  mutate(BD = case_when(bd_samp..paren.g.cm.hyphen.3.paren. != "NA" ~ bd_samp..paren.g.cm.hyphen.3.paren., #use bd_samp if it's not 0
+            TRUE ~ bd_whole..paren.g.cm.hyphen.3.paren.)) %>% #otherwise use bd_whole
+  mutate(across(c(8,9,11:13), as.numeric)) #convert columns to numeric
+```
+
+```{r ISCN meta data, eval=FALSE}
 #data file 2
 #if/else loop for file download if the file isn't already downloaded
 if(file.exists('/ISCN_2.csv')){ #if a file exists in working directory
@@ -630,19 +647,108 @@ ISCN_4 <-read.csv("ISCN_4.csv", header=F
                     "soc_lcount_ISCN",     
                     "modification_date..paren.YYYY.hyphen.MM.hyphen.DD.paren."    ), check.names=TRUE)
 
-#look at data structure
-str(ISCN) #structure
-
-
-#select only usable data
-soil_df <- ISCN[, c(3:6, 20, 24, 26, 32, 36, 37, 41, 44:46)] %>% #dataset name, lat/long, vegclass, BDs, SOC, pH, sand/silt/clay
-  filter(bd_whole..paren.g.cm.hyphen.3.paren. != "NA") %>% #filter out NA values
-  mutate(BD = case_when(bd_samp..paren.g.cm.hyphen.3.paren. != "NA" ~ bd_samp..paren.g.cm.hyphen.3.paren., #use bd_samp if it's not 0
-            TRUE ~ bd_whole..paren.g.cm.hyphen.3.paren.)) #otherwise use bd_whole
-  mutate(across(c(8,9,11:13), as.numeric)) #convert columns to numeric
-
 
 ```
+
+#### Soil Organic Matter Fractions
+
+To estimate how much C is stored in particulate organic matter (POM) or mineral-associated organic matter (MAOM) fractions across biomes globally, I used data from [Georgiou et al. 2022](https://www.nature.com/articles/s41467-022-31540-9). The top 30cm was selected to compare topsoil, and was scaled up to the area of global cover.
+
+Regions were defined based on latitude, from the [Encyclopedia of World Climatology, 2005](https://link.springer.com/referencework/10.1007/1-4020-3266-8). I used a reference table from [Chapter]() linking soil orders to ecosystem types to further classify biomes in the SOM dataset. A mean annual precipitation of 2000mm or more was considered "moist" for tropical and subtropical broadleaf forests, while less than 2000mm was considered "dry" ([Siyum 2020](https://doi.org/10.1186/s13717-020-00229-6)).
+
+The data was filtered to remove fallow land, and only the top 30cm of soil was used for analysis. The data was then merged with the global cover data to estimate C pools in Pg of C.
+
+```{r SOM C data}
+
+#MAOM and POM C data from Georgiou et al. 2022
+SOMC <- read_csv("MOC_synthesis.csv") %>%
+  rename("MAOM_C" = "SiltClayC") %>%
+  filter(Vegetation != "Fallow") %>% #remove fallow
+  na.omit() %>%
+  mutate(region = #add region based on latitude
+           case_when(Lat < 23.5 & Lat > -23.5 ~ "Tropical",
+                     Lat < 30 & Lat > 23.5 | Lat < -23.5 & Lat > -30 ~ "Subtropical",
+                     Lat < 66.5 & Lat > 30 | Lat < -30 & Lat > -66.5 ~ "Temperate",
+                     Lat > 66.5 & Lat < -66.5 ~ "Arctic")) %>% #define regions
+  mutate(biome = #define biomes more closely
+           case_when(Vegetation == "Grassland" & region == "Temperate" 
+                     ~ "Temperate Grasslands",
+										 Vegetation == "Grassland" & region == "Tropical" 
+                     ~ "Tropical & Subtropical Grasslands",
+										 Vegetation == "Grassland" & region == "Subtropical" 
+                     ~ "Tropical & Subtropical Grasslands",
+										 Vegetation == "Pasture" & region == "Temperate" 
+                     ~ "Temperate Grasslands",
+										 Vegetation == "Pasture" & region == "Tropical" 
+                     ~ "Tropical & Subtropical Grasslands",
+										 Vegetation == "Pasture" & region == "Subtropical" 
+                     ~ "Tropical & Subtropical Grasslands",
+										 Vegetation == "Savanna" & region == "Temperate" 
+                     ~ "Temperate Savannas",
+										 Vegetation == "Savanna" & region == "Tropical" 
+                     ~ "Tropical & Subtropical Savannas",
+										 Vegetation == "Savanna" & region == "Subtropical" 
+                     ~ "Tropical & Subtropical Savannas",
+										 Vegetation == "Shrubland" & region == "Temperate" 
+                     ~ "Temperate Shrublands",
+										 Vegetation == "Shrubland" & region == "Tropical" 
+                     ~ "Tropical & Subtropical Shrublands",
+										 Vegetation == "Shrubland" & region == "Subtropical" 
+                     ~ "Tropical & Subtropical Shrublands",
+										 Vegetation == "Temperate Forest" & Soil.order == "Alfisols" 
+                     ~ "Temperate Broadleaf & Mixed Forests",
+										 Vegetation == "Temperate Forest" & Soil.order == "Entisols" 
+                     ~ "Temperate Conifer Forests",
+										 Vegetation == "Temperate Forest" & Soil.order == "Inceptisols" 
+                     ~ "Temperate Conifer Forests",
+										 Vegetation == "Tropical Forest" & Soil.order == "Inceptisols" 
+                     ~ "Tropical & Subtropical Coniferous Forests",
+										 Vegetation == "Temperate Forest" & Soil.order == "Mollisols" 
+                     ~ "Temperate Broadleaf & Mixed Forests",
+										 Vegetation == "Tropical Forest" & Soil.order == "Oxisols" & MAP > 2000 
+                     ~ "Tropical & Subtropical Moist Broadleaf Forests",
+										 Vegetation == "Tropical Forest" & Soil.order == "Oxisols" & MAP < 2000 
+                     ~ "Tropical & Subtropical Dry Broadleaf Forests",
+										 Vegetation == "Temperate Forest" & Soil.order == "Spodosols" 
+                     ~ "Temperate Broadleaf & Mixed Forests",
+										 Vegetation == "Tropical Forest" & Soil.order == "Ultisols" & MAP > 2000
+                     ~ "Tropical & Subtropical Moist Broadleaf Forests",
+										 Vegetation == "Tropical Forest" & Soil.order == "Ultisols" & MAP < 2000
+                     ~ "Tropical & Subtropical Dry Broadleaf Forests",
+													 .default = Vegetation)) #set default value
+  
+
+SOMC_top30_means <- SOMC %>%
+  filter(Bottom.depth <= 30) %>%
+  select(biome, Top.depth, Bottom.depth, Bulk.C, MAOM_C, POM_C) %>%
+  group_by(biome) %>%
+  summarise_if(is.numeric, mean, na.rm = TRUE)
+
+#Scale to area of biome, using average bulk density & sampling depth
+biomes_C <- merge(ecoregions_sum, SOMC_top30_means, all.x = TRUE) %>%
+  mutate(SOM_PgC = (1.33*(Bottom.depth)*10000000000)*
+           (Bulk.C/1000000000000000000)*area_sq_km) %>%
+  mutate(MAOM_PgC = (1.33*(Bottom.depth)*10000000000)*
+           (MAOM_C/1000000000000000000)*area_sq_km) %>%
+  mutate(POM_PgC = (1.33*(Bottom.depth)*10000000000)*
+           (POM_C/1000000000000000000)*area_sq_km)
+
+write_csv(biomes_C, "Cpools30cm.csv")
+
+library(gt)
+
+C_table <- biomes_C
+
+C_table <- C_table %>%
+  column_to_rownames(var = "biome") %>%
+  signif(., 4) #round to 4 significant figures
+
+gt(C_table, 
+   rownames_to_stub=TRUE)
+
+```
+
+
 
 ### Plant Carbon
 
@@ -664,11 +770,11 @@ To estimate the contribution of AM fungal biomass to global C pools, I used the 
 ```{r AM C data}
 
 #merge with cover, add ERH C based on Soudzilovskaia et al. 2015 - g/m-2 estimates. Different than C flux from Hawkins et al. 2023
-coverC <- merge(AMcover, plantC, 
+coverC <- merge(AM_cover, plantC, 
 	by="Ecosystem", all.x = T) %>% #merge 
   mutate(AMbio_C = (Area*1000000)*0.0000000000000475) #add ERH
 
-ecoregions_area <- ecoregions_area %>%
+AM_cover <- AM_cover %>%
   mutate(AMbio_C = (AM_area*1000000)*0.0000000000000475) #add ERH
 
 #C flux per veg type via Hawkins et al. 2023
@@ -705,68 +811,41 @@ coverC2 <- rbind(coverC2, trfAM)
 
 ```
 
-### Soil Organic Matter Fractions
+## Plots
 
-To estimate how much C is stored in particulate organic matter (POM) or mineral-associated organic matter (MAOM) fractions across biomes globally, I used data from [Georgiou et al. 2022](https://www.nature.com/articles/s41467-022-31540-9). The top 30cm was selected to compare topsoil, and was scaled up to the area of global cover.
+### Region area graph
+```{r area graph, echo=FALSE, fig.cap="Area of each biome in square kilometers", fig.width=8, fig.height=5}
 
-```{r SOM C data}
+#Melt the data frame to long format for ggplot
+AM_EcM_prop <- ecoregions_sum %>%
+  pivot_longer(cols = c(AM_area, EcM_area), names_to = "mycorrhizal_type", values_to = "area") 
 
-#MAOM and POM C data from Georgiou et al. 2022
-SOMC <- read_csv("MOC_synthesis.csv") %>%
-  rename("Ecosystem" = "Vegetation") %>%
-  rename("MAOM_C" = "SiltClayC") %>%
-  select(Ecosystem, Top.depth, Bottom.depth, Bulk.C, MAOM_C, POM_C)
-SOMC[SOMC == "Grassland"] <- "Temperate Grassland"
-SOMC[SOMC == "Savanna"] <- "Savanna & Shrubland"
-SOMC[SOMC == "Shrubland"] <- "Savanna & Shrubland"
+ggplot(AM_EcM_prop, aes(x=reorder(biome, -area), y=area, fill=mycorrhizal_type)) +
+  geom_bar(stat="summary", width = 0.7, position="stack", colour="black") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  labs(title="Area of each biome and mycorrhizal dominance",
+       x="Biome",
+       y="Area (sq km)",
+       fill="Mycorrhizal type") +
+  scale_fill_d3("category20c", labels=c("AM", "EcM")) + #color palette from science package
+  theme_minimal() +
+  scale_y_continuous(labels = scales::comma) #add commas to y axis labels
 
-SOMC_top30 <- SOMC %>%
-  filter(Bottom.depth <= 30)
-
-#Scale to area of biome, using average bulk density & sampling depth
-coverC_top30 <- merge(coverC2, SOMC_top30) %>%
-  mutate(PgC = (1.33*(Bottom.depth)*10000000000)*
-           (Bulk.C/1000000000000000000)*Area) %>%
-  mutate(MAOM_PgC = (1.33*(Bottom.depth)*10000000000)*
-           (MAOM_C/1000000000000000000)*Area) %>%
-  mutate(POM_PgC = (1.33*(Bottom.depth)*10000000000)*
-           (POM_C/1000000000000000000)*Area)
-
-Ctop30means <- coverC_top30 %>%
-  group_by(Ecosystem) %>%
-  summarise_if(is.numeric, mean, na.rm = TRUE)
-
-
-
-write_csv(coverC_top30, "Cpools30cm.csv")
-write_csv(Ctop30means, "Cpoolmeans30cm.csv")
-
-install.packages("gt")
-library(gt)
-
-C_table <- Ctop30means[, c(1:6,10:12)]
-
-C_table <- C_table %>%
-  column_to_rownames(var = "Ecosystem") %>%
-  signif(., 4) #round to 4 significant figures
-
-gt(C_table, 
-   rownames_to_stub=TRUE)
+ggsave("AM_EcM_area.png", path = "Figures", #save to folder within working directory
+       width = 8, height = 5, dpi = 300, bg=NULL) #save figure
 
 ```
 
-## Plots
+### AM biomass C graph
 
 ```{r plot AM bio}
 
 #bar chart AM biomass C
-ecoregions_area %>%
-  na.omit() %>%
-ggplot(, aes(x=biome, y=AMbio_C, fill=biome)) + 
+ggplot(AM_cover, aes(x=biome, y=AMbio_C, fill=biome)) + 
     geom_bar(position="dodge", stat = "identity", width = 0.7, colour="black") + #add proportion bars with black outline
     scale_x_discrete(guide = guide_axis(angle = 45)) +
-    #scale_fill_manual(values = wes_palette("Zissou1")) + #call from wesanderson library
-    theme_few() #remove grid, white background, box around plot - from ggthemes
+    scale_fill_d3("category20c") +
+    theme_minimal() 
 
 ```
 
