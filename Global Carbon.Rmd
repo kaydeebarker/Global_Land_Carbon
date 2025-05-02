@@ -654,7 +654,7 @@ ISCN_4 <-read.csv("ISCN_4.csv", header=F
 
 To estimate how much C is stored in particulate organic matter (POM) or mineral-associated organic matter (MAOM) fractions across biomes globally, I used data from [Georgiou et al. 2022](https://www.nature.com/articles/s41467-022-31540-9). The top 30cm was selected to compare topsoil, and was scaled up to the area of global cover.
 
-Regions were defined based on latitude, from the [Encyclopedia of World Climatology, 2005](https://link.springer.com/referencework/10.1007/1-4020-3266-8). I used a reference table from [Chapter]() linking soil orders to ecosystem types to further classify biomes in the SOM dataset. A mean annual precipitation of 2000mm or more was considered "moist" for tropical and subtropical broadleaf forests, while less than 2000mm was considered "dry" ([Siyum 2020](https://doi.org/10.1186/s13717-020-00229-6)).
+Regions were defined based on latitude, from the [Encyclopedia of World Climatology, 2005](https://link.springer.com/referencework/10.1007/1-4020-3266-8). I used a reference table from [Chapter]() linking soil orders to ecosystem types to further classify biomes in the SOM dataset. A mean annual precipitation of 2000mm or more was considered "moist" for tropical and subtropical broadleaf forests, while less than 2000mm was considered "dry" ([Siyum 2020](https://doi.org/10.1186/s13717-020-00229-6)). Mediterranean forests were defined as having a mean annual precipitation of 900mm or less, within the 30 and 45 degree latitute range ([Encyclopaedia Britannica 2025](https://www.britannica.com/science/Mediterranean-climate)). Xeric shrublands were defined as having a mean annual precipitation of between 200mm and 1000mm ([Neffar and Chenchouni, 2025](https://doi.org/10.1016/B978-0-443-36569-0.00016-1)). The data was filtered to remove fallow land, and only the top 30cm of soil was used for analysis. The data was then merged with the global cover data to estimate C pools in Pg of C.
 
 The data was filtered to remove fallow land, and only the top 30cm of soil was used for analysis. The data was then merged with the global cover data to estimate C pools in Pg of C.
 
@@ -668,6 +668,8 @@ SOMC <- read_csv("MOC_synthesis.csv") %>%
   mutate(region = #add region based on latitude
            case_when(Lat < 23.5 & Lat > -23.5 ~ "Tropical",
                      Lat < 30 & Lat > 23.5 | Lat < -23.5 & Lat > -30 ~ "Subtropical",
+                     MAP <= 900 & Lat < 45 & Lat > 30 | 
+                       MAP <= 900 & Lat > - 45 & Lat < -30 ~ "Mediterranean",
                      Lat < 66.5 & Lat > 30 | Lat < -30 & Lat > -66.5 ~ "Temperate",
                      Lat > 66.5 & Lat < -66.5 ~ "Arctic")) %>% #define regions
   mutate(biome = #define biomes more closely
@@ -695,6 +697,10 @@ SOMC <- read_csv("MOC_synthesis.csv") %>%
                      ~ "Tropical & Subtropical Shrublands",
 										 Vegetation == "Shrubland" & region == "Subtropical" 
                      ~ "Tropical & Subtropical Shrublands",
+										 Vegetation == "Shrubland" & MAP > 200 & MAP < 1000
+                     ~ "Xeric Shrublands",
+										 grepl("Forest", Vegetation, ignore.case = TRUE) & region == "Mediterranean" 
+                     ~ "Mediterranean Forests",
 										 Vegetation == "Temperate Forest" & Soil.order == "Alfisols" 
                      ~ "Temperate Broadleaf & Mixed Forests",
 										 Vegetation == "Temperate Forest" & Soil.order == "Entisols" 
@@ -720,7 +726,7 @@ SOMC <- read_csv("MOC_synthesis.csv") %>%
 
 SOMC_top30_means <- SOMC %>%
   filter(Bottom.depth <= 30) %>%
-  select(biome, Top.depth, Bottom.depth, Bulk.C, MAOM_C, POM_C) %>%
+  select(biome, Bottom.depth, Bulk.C, MAOM_C, POM_C) %>%
   group_by(biome) %>%
   summarise_if(is.numeric, mean, na.rm = TRUE)
 
