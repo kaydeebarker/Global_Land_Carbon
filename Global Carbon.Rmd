@@ -20,21 +20,27 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse) #Tidy packages
 library(sf) #Spatial package that can read and create shapefiles 
 library(terra) #Raster package
+library(gt) #Table package
 library(ggsci) #Color palettes based on scientific journals, data viz libraries, sci fi
 
 ```
 
-## Ecosystem Cover Data
+## Spatial Data
 
-Biomes containing arbuscular mycorrhizal (AM) fungi include croplands, temperate grasslands, savannas and shrublands (i.e. tropical grasslands), temperate forests, and tropical forests. 
+Previously: the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)). Aboveground carbon (C) and root C were taken from previous C estimates and root:shoot ratios ([Robinson 2007](https://royalsocietypublishing.org/doi/10.1098/rspb.2007.1012), [Liu et al. 2015](https://www.nature.com/articles/nclimate2581)). 
 
-I used data from the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)) and [Ecoregions2017](https://developers.google.com/earth-engine/datasets/catalog/RESOLVE_ECOREGIONS_2017) to determine total area in square kilometers for each biome. 
+Update: I used data from [Ecoregions2017](https://developers.google.com/earth-engine/datasets/catalog/RESOLVE_ECOREGIONS_2017) to determine total area in square kilometers for each biome. I added croplands as a biome, with an estimated area of 1,244 million hectares ([Potapov et al. 2022](https://doi.org/10.1038/s43016-021-00429-z)).
 
 I used median AM and ectomycorrhizal (EcM) fungal tree and shrub data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the area of each biome that might contain each mycorrhizal type. For tundras, I considered 49% to be herbaceous and 37% shrub cover, with the remaining barren ([Walker et al. 2005](https://onlinelibrary.wiley.com/doi/10.1111/j.1654-1103.2005.tb02365.x)).
 For savannas, I used a grass:tree ratio of 3.56 ([Belovitch et al. 2023](https://doi.org/10.1111/nph.18909)) and converted this to 78% grass cover and 22% tree cover before applying the AM to EcM proportion for trees. 
 
+Biomass C from a NASA EarthData-hosted dataset, Global Aboveground and Belowground Biomass Carbon Density Maps for the Year 2010 ([Spawn and Gibbs, 2020](https://doi.org/10.3334/ORNLDAAC/1763)).
 
-```{r load cover data, eval=FALSE}
+All C data is in petagrams (Pg) of C.
+
+### Ecosystem Cover Data
+
+```{r load FAO data, eval=FALSE}
 
 #Download total land cover map from FAO if not downloaded already
 if(file.exists('/glc_shv10_DOM.Tif')){
@@ -44,13 +50,16 @@ if(file.exists('/glc_shv10_DOM.Tif')){
 unzip("FAO_covermap.zip", exdir = ".")
 file.remove("FAO_covermap.zip")}
 
-biomes <- rast("glc_shv10_DOM.Tif")
+landcover <- rast("glc_shv10_DOM.Tif")
 
 #Make df of frequency of each value in raster
-landcover <- as.data.frame(freq(biomes)) %>%
+landcover <- as.data.frame(freq(landcover)) %>%
   rename("area_sq_km" = "count") 
 
 landcover$biome <- c("Null", "Artificial", "Cropland", "Grassland", "Tree Covered", "Shrubland", "Herbaceous Wetland", "Mangrove", "Sparse Veg", "Bare Soil", "Snow & Glaciers", "Water")
+```
+
+```{r load ecoregions data}
 
 #Download total land cover map from EcoRegions2017 if not downloaded already
 if(file.exists('/Ecoregions2017.shp')){
@@ -63,11 +72,15 @@ if(file.exists('/Ecoregions2017.shp')){
 unzip("Ecoregions2017.zip", exdir = ".")
 file.remove("Ecoregions2017.zip")}
 
-ecoregions <- st_read("Ecoregions2017.shp")
+#Read in ecoregions shapefile
+ecoregions <- st_read("Spatial_data/Ecoregions2017.shp")
 
 #Calculate area of each ecoregion into sq km
 #st_crs(ecoregions) #check coordinate system - WGS 84
 ecoregions <- st_make_valid(ecoregions) #fix invalid geometries
+
+#View map
+#ggplot(data = ecoregions) + geom_sf()
 
 #Transform to a projected CRS (e.g., UTM) for accurate area calculations
 #Replace EPSG:4326 with planar CRS (e.g., EPSG:3395 for World Mercator)
@@ -78,21 +91,69 @@ ecoregions_area$area_sq_m <- st_area(ecoregions_area)
 ecoregions_area$area_sq_km <- as.numeric(ecoregions_area$area_sq_m) / 1e6
 
 #Convert into data frame
-ecoregions_area <- as.data.frame(ecoregions_area)
+ecoregions_area_df <- as.data.frame(ecoregions_area, xy = TRUE)
 
-#write.csv(ecoregions_area, "ecoregions_area.csv") #save as csv to save time on loading
-#ecoregions_area <- read.csv("ecoregions_area.csv") #read in data
+#Convert to sf object for spacial (need for overlay)
+ecoregions_area_sf <- st_as_sf(ecoregions_area, coords = c("geometry"), crs = 3395)
 
 ```
 
-```{r clean ecoregions data}
+### Plant Biomass Carbon
+
+#### Aboveground Biomass Carbon
+
+```{r load ABG data}
+
+#Read in aboveground biomass C data from NASA EarthData and lower resolution for processing
+ABG_C <- rast("Spatial_data/aboveground_biomass_carbon_2010.tif") %>%
+  #aggregate(, fact = 3.33) #%>% #aggregate to 1km resolution
+  aggregate(, fact = 33.33) #aggregate to 10km resolution
+
+#Make df
+ABG_C_df <- as.data.frame(ABG_C, xy=TRUE) 
+
+#Overlay ecoregions onto raster
+ABG_sf <- st_as_sf(ABG_C_df, coords = c("x", "y"), crs = st_crs(ABG_C)) #convert to sf object
+ABG_sf <- st_transform(ABG_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
+ABG_regions <- st_join(ABG_sf, ecoregions_area_sf, join = st_intersects) #join ecoregions to ABG data
+
+
+```
+
+#### Belowground Biomass Carbon
+
+```{r load BG data}
+
+#Read in aboveground biomass C data from NASA EarthData and lower resolution for processing
+BG_C <- rast("Spatial_data/belowground_biomass_carbon_2010.tif") %>%
+  #aggregate(, fact = 3.33) #%>% #aggregate to 1km resolution
+  aggregate(, fact = 33.33) #aggregate to 10km resolution
+
+#Make df
+BG_C_df <- as.data.frame(BG_C, xy=TRUE) 
+
+#Overlay ecoregions onto raster
+BG_sf <- st_as_sf(BG_C_df, coords = c("x", "y"), crs = st_crs(BG_C)) #convert to sf object
+BG_sf <- st_transform(BG_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
+biomass_regions <- st_join(BG_sf, ABG_regions, join = st_intersects) #join ecoregions, ABG, and BG data
+
+biomass_regions_df <- as.data.frame(biomass_regions) #make into dataframe
+
+
+```
+
+### Combine and Clean Data
+
+```{r clean spatial data}
 
 Steidinger <- read.csv('AM_EM_proportions.csv') #read in data for myc proportions
 
 #Create new column with more specific ecoregion names
-ecoregions_area <- ecoregions_area %>%
-  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km) %>% #select only relevant columns
-  na.omit() %>%
+biomass_regions_df <- biomass_regions_df %>%
+  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km, aboveground_biomass_carbon_2010, belowground_biomass_carbon_2010) #%>% #select only relevant columns
+  #na.omit() %>%
+  filter(aboveground_biomass_carbon_2010 > 0) %>% #remove 0 values
+  filter(belowground_biomass_carbon_2010 > 0) %>% #remove 0 values
   filter(!grepl("Desert", ECO_NAME, ignore.case = TRUE)) %>% #filter out deserts
   filter(!grepl("Rock and Ice", ECO_NAME, ignore.case = TRUE)) %>% #filter out rock and ice
   mutate(across('BIOME_NAME', str_replace, 'Mediterranean Forests, Woodlands & Scrub', 'Mediterranean Forests')) %>%
@@ -211,10 +272,12 @@ ecoregions_area <- ecoregions_area %>%
 													     ~ "Flooded Grasslands",
 		                           .default = BIOME_NAME)) #set default value
 
+#Cropland area
+cropland <- data.frame(biome = "Cropland", area_sq_km = 12440000) #1,244 million hectares
 
 #Create column with area adjusted to AM proportions
-ecoregions_area <- ecoregions_area %>%
-  bind_rows(landcover[3,]) %>% #bind rows of landcover to ecoregions
+biomass_regions_df <- biomass_regions_df %>%
+  bind_rows(cropland) %>% #bind rows of landcover to ecoregions
   mutate(AM_area = #multiply by proportion of AM
            case_when(biome == "Tundra"
                      ~ ((area_sq_km*0.49)+(area_sq_km*0.37*((Steidinger$median[
@@ -312,23 +375,22 @@ ecoregions_area <- ecoregions_area %>%
                      ~ 0,
             .default = area_sq_km))
 
-ecoregions_sum <- ecoregions_area %>%
+ecoregions_sum <- biomass_regions_df %>%
   group_by(biome) %>% #group by biome
   select(biome, area_sq_km, AM_area, EcM_area) %>% #select only relevant columns
   summarise_at(c("area_sq_km", "AM_area", "EcM_area"), sum, na.rm = TRUE) #%>%
 
-write.csv(ecoregions_sum, "ecoregions_sum.csv") #save as csv to save time on loading
+#write.csv(ecoregions_sum, "ecoregions_sum.csv") #save as csv to save time on loading
 
-ecoregions_sum <- read.csv("ecoregions_sum.csv") #read in data
+#ecoregions_sum <- read.csv("ecoregions_sum.csv") #read in data
 
 AM_cover <- ecoregions_sum %>%
   filter(AM_area > 0) #remove 0 values
 
 ```
 
-## Carbon Data
 
-### Soil Data
+## Soil Data
 
 #### International Soil Carbon Network Data
 
@@ -739,34 +801,11 @@ biomes_C <- merge(ecoregions_sum, SOMC_top30_means, all.x = TRUE) %>%
   mutate(POM_PgC = (1.33*(Bottom.depth)*10000000000)*
            (POM_C/1000000000000000000)*area_sq_km)
 
-write_csv(biomes_C, "Cpools30cm.csv")
-
-library(gt)
-
-C_table <- biomes_C
-
-C_table <- C_table %>%
-  column_to_rownames(var = "biome") %>%
-  signif(., 4) #round to 4 significant figures
-
-gt(C_table, 
-   rownames_to_stub=TRUE)
+#write_csv(biomes_C, "Cpools30cm.csv")
 
 ```
 
 
-
-### Plant Carbon
-
-Aboveground carbon (C) and root C were taken from previous C estimates and root:shoot ratios ([Robinson 2007](https://royalsocietypublishing.org/doi/10.1098/rspb.2007.1012), [Liu et al. 2015](https://www.nature.com/articles/nclimate2581)). All C data is in petagrams (Pg) of C.
-
-```{r plant C data}
-
-#aboveground and root C data from Robinson 2007, Liu et al. 2015
-#used proportion of root:shoot from Robinson 2007 to fill in Liu et al. 2015 root C estimates - in Pg C
-plantC <- read_csv("plantC.csv")
-
-```
 
 ### AM Fungal Carbon
 
@@ -817,7 +856,20 @@ coverC2 <- rbind(coverC2, trfAM)
 
 ```
 
-## Plots
+## Visualizations
+
+### Table of biome area and C pools
+```{r table}
+
+C_table <- biomes_C %>%
+  column_to_rownames(var = "biome") %>%
+  na.omit() %>%
+  signif(., 4) #round to 4 significant figures
+
+gt(C_table, 
+   rownames_to_stub=TRUE)
+
+```
 
 ### Region area graph
 ```{r area graph, echo=FALSE, fig.cap="Area of each biome in square kilometers", fig.width=8, fig.height=5}
@@ -847,11 +899,17 @@ ggsave("AM_EcM_area.png", path = "Figures", #save to folder within working direc
 ```{r plot AM bio}
 
 #bar chart AM biomass C
-ggplot(AM_cover, aes(x=biome, y=AMbio_C, fill=biome)) + 
+ggplot(AM_cover, aes(x=reorder(biome, -area_sq_km), y=AMbio_C, fill=biome)) + 
     geom_bar(position="dodge", stat = "identity", width = 0.7, colour="black") + #add proportion bars with black outline
     scale_x_discrete(guide = guide_axis(angle = 45)) +
+    labs(title="AM Fungal Biomass Carbon by Biome",
+       x="Biome",
+       y="AM Biomass C (Pg C)") +
     scale_fill_d3("category20c") +
     theme_minimal() 
+
+ggsave("AM_bioC_052025.png", path = "Figures", #save to folder within working directory
+       width = 8, height = 5, dpi = 300, bg=NULL) #save figure
 
 ```
 
