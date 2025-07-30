@@ -1,7 +1,7 @@
 ---
 title: "Global Carbon Estimates"
 author: "Kaydee S. Barker"
-date: '2023-09-22'
+date: "`r Sys.Date()`"
 output: 
   pdf_document:
     toc: yes
@@ -28,14 +28,20 @@ library(ggsci) #Color palettes based on scientific journals, data viz libraries,
 
 ## Spatial Data
 
-Previously: the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)). Aboveground carbon (C) and root C were taken from previous C estimates and root:shoot ratios ([Robinson 2007](https://royalsocietypublishing.org/doi/10.1098/rspb.2007.1012), [Liu et al. 2015](https://www.nature.com/articles/nclimate2581)). 
+Previously: 
 
-Update: I used data from [Ecoregions2017](https://developers.google.com/earth-engine/datasets/catalog/RESOLVE_ECOREGIONS_2017) to determine total area in square kilometers for each biome. For cropland cover, I used data from [Global Land Analysis & Discovery](https://glad.umd.edu/dataset/croplands) ([Potapov et al. 2022](https://doi.org/10.1038/s43016-021-00429-z)).
-
-I used median AM and ectomycorrhizal (EcM) fungal tree and shrub data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the area of each biome that might contain each mycorrhizal type. For tundras, I considered 49% to be herbaceous and 37% shrub cover, with the remaining barren ([Walker et al. 2005](https://onlinelibrary.wiley.com/doi/10.1111/j.1654-1103.2005.tb02365.x)).
+- I first used the United Nations Food and Agriculture Organization (FAO)'s Global Land Cover - SHARE database ([Latham et al. 2014](https://www.fao.org/uploads/media/glc-share-doc.pdf)). Aboveground carbon (C) and root C were taken from previous C estimates and root:shoot ratios ([Robinson 2007](https://royalsocietypublishing.org/doi/10.1098/rspb.2007.1012), [Liu et al. 2015](https://www.nature.com/articles/nclimate2581)). For cropland cover, I used data from [Global Land Analysis & Discovery](https://glad.umd.edu/dataset/croplands) ([Potapov et al. 2022](https://doi.org/10.1038/s43016-021-00429-z)).
+- I used median AM and ectomycorrhizal (EcM) fungal tree and shrub data from [Steidinger et al. 2019](https://doi.org/10.1038/s41586-019-1411-2) to determine the area of each biome that might contain each mycorrhizal type. For tundras, I considered 49% to be herbaceous and 37% shrub cover, with the remaining barren ([Walker et al. 2005](https://onlinelibrary.wiley.com/doi/10.1111/j.1654-1103.2005.tb02365.x)).
 For savannas, I used a grass:tree ratio of 3.56 ([Belovitch et al. 2023](https://doi.org/10.1111/nph.18909)) and converted this to 78% grass cover and 22% tree cover before applying the AM to EcM proportion for trees. 
 
-Biomass C from a NASA EarthData-hosted dataset, Global Aboveground and Belowground Biomass Carbon Density Maps for the Year 2010 ([Spawn and Gibbs, 2020](https://doi.org/10.3334/ORNLDAAC/1763)).
+
+
+Update: I used data from [Ecoregions2017](https://developers.google.com/earth-engine/datasets/catalog/RESOLVE_ECOREGIONS_2017) to determine total area in square kilometers for each biome. I used the [Global Food Security Support Analysis Data (GFSAD)](https://lpdaac.usgs.gov/products/gfsad1kcdv001/#tools) ([Huang et al. 2016](https://doi.org/10.1016/j.rse.2015.12.036)) to determine the area of cropland cover.
+
+I used a mycorrhizal fine root stocks spatial dataset by [Milagros et al. 2023](https://www.nature.com/articles/s41597-022-01913-2) hosted on [DRYAD](https://doi.org/10.5061/dryad.866t1g1tt).
+
+Aboveground biomass C was taken from a NASA EarthData-hosted dataset, Global Aboveground and Belowground Biomass Carbon Density Maps for the Year 2010 ([Spawn and Gibbs, 2020](https://doi.org/10.3334/ORNLDAAC/1763)). 
+
 
 All C data is in petagrams (Pg) of C.
 
@@ -63,7 +69,7 @@ landcover$biome <- c("Null", "Artificial", "Cropland", "Grassland", "Tree Covere
 ```{r load ecoregions data}
 
 #Download total land cover map from EcoRegions2017 if not downloaded already
-if(file.exists('/Spatial_data/Ecoregions2017.shp')){
+if(file.exists('Spatial_data/Ecoregions2017.shp')){
   print('downloaded')
   }else{
   download.file("https://storage.googleapis.com/teow2016/Ecoregions2017.zip", 
@@ -86,11 +92,6 @@ ecoregions_sf <- st_transform(ecoregions, crs = 3395) # EPSG:3395 for World Merc
 #Convert to sf object for spacial (need for overlay)
 ecoregions_sf <- st_as_sf(ecoregions_sf, coords = c("geometry"), crs = 3395)
 
-#Visualize
-ggplot() +
-  geom_sf(data = ecoregions_sf, aes(fill = BIOME_NAME)) +
-  theme_minimal() +
-  theme(legend.position = "bottom")
 
 #Convert into data frame
 #ecoregions_area_df <- as.data.frame(ecoregions_area, xy = TRUE)
@@ -99,10 +100,10 @@ ggplot() +
 
 ### Cropland Cover
 
-```{r load cropland data}
+```{r load cropland data, eval=FALSE}
 
-#Download cropland cover map from Global Land Analysis & Discovery if not downloaded already
-if(file.exists('/Spatial_data/cropland_2019.tif')){
+#Download cropland cover map from Global Land Analysis & Discovery if not downloaded already - update don't use
+if(file.exists('Spatial_data/cropland_2019.tif')){
   print('downloaded')
   }else{
   download.file("https://glad.geog.umd.edu/Potapov/Global_Crop/Data/Global_cropland_3km_2019.tif", 
@@ -111,30 +112,53 @@ if(file.exists('/Spatial_data/cropland_2019.tif')){
                 options(timeout = max(300, getOption("timeout"))))
   }
 
-#Read in and lower resolution for processing
-cropland <- rast("Spatial_data/cropland_2019.tif") %>%
+#Read in cropland cover map from Global Land Analysis & Discovery
+cropland2019 <- rast("Spatial_data/cropland_2019.tif") %>%
   aggregate(, fact = 3.33) #aggregate to 10km resolution
 
+#Read in raster from Global Food Security Support Analysis Dataset and lower resolution for processing
+cropland <- rast("Spatial_data/globalcropland2010.tif") 
+  
+#Filter values to keep, set all other cells to NA
+crops_irr <- c(1,2,3) #set values to keep in raster - irrigated cropland only
+cropland_irr <- mask(cropland, cropland %in% crops_irr, maskvalue=FALSE) #mask raster to keep only values in crops_keep
+crop_sqkm <- global(!is.na(cropland_irr), fun = "sum", na.rm=TRUE)[1,1] #get the number of non-NA cells (which are 1 sq. km)
+crop_sqkm <- as.data.frame(crop_sqkm) #make into df
+write_csv(crop_sqkm, "crop_sqkm.csv")
+
+cropland_irr <- cropland_irr %>%
+  aggregate(, fact = 10) #aggregate to 10km resolution
+
+#Visualize raster
+#plot(cropland_irr, main = "Global Cropland Cover 2010") #plot raster
+  
+
+```
+
+```{r cropland to sf, eval=FALSE}
+
 #Make df and remove 0 values
-cropland_df <- as.data.frame(cropland, xy=TRUE) %>%
-  filter(cropland_2019 > 0) #remove 0 values
+cropland_df <- as.data.frame(cropland_irr, xy=TRUE) 
 
 #Overlay ecoregions onto raster
 cropland_sf <- st_as_sf(cropland_df, coords = c("x", "y"), crs = st_crs(cropland)) #convert to sf object
-cropland_sf <- st_make_valid(cropland_sf) #fix invalid geometries
 cropland_sf <- st_transform(cropland_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
-
-#Visualize
-ggplot() +
-  geom_sf(data = cropland_sf, aes(fill = cropland_2019)) +
-  scale_fill_viridis_c() +
-  theme_minimal() +
-  theme(legend.position = "bottom")
+cropland_sf <- st_make_valid(cropland_sf) #fix invalid geometries
+crop_ecoregions <- st_join(ecoregions_sf, cropland_sf, join = st_intersects) #join ecoregions to cropland data
 
 #Make into dataframe and select columns
-#crop_ecoregions_df <- as.data.frame(crop_ecoregions) %>% #make into dataframe
-#  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km, geometry, cropland_2019) #select relevant columns
-  
+#cropland_df <- as.data.frame(crop_ecoregions) %>% #make into dataframe
+ # dplyr::select(ECO_NAME, BIOME_NAME, geometry, globalcropland2010) #%>% #select relevant columns
+  #mutate(BIOME_NAME =
+   # case_when(globalcropland >0 & BIOME_NAME = NA, ~ "Cropland"))
+
+#Visualize
+#ggplot() +
+ # geom_sf(data = ecoregions_sf, aes(fill = BIOME_NAME), color = NA) +
+  #geom_sf(data = cropland_sf, aes(fill = globalcropland2010), color = NA) +
+  #theme_minimal() +
+  #labs(title = "Cropland Cover in Ecoregions") +
+  #theme(legend.position = "bottom")
 
 ```
 
@@ -156,12 +180,12 @@ ABG_C_df <- as.data.frame(ABG_C, xy=TRUE) %>%
 #Overlay ecoregions onto raster
 ABG_sf <- st_as_sf(ABG_C_df, coords = c("x", "y"), crs = st_crs(ABG_C)) #convert to sf object
 ABG_sf <- st_transform(ABG_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
-cropland_sf <- st_make_valid(ABG_sf) #fix invalid geometries
-ABG_regions <- st_join(ABG_sf, ecoregions_sf, join = st_intersects) #join ecoregions to ABG data
+ABG_sf <- st_make_valid(ABG_sf) #fix invalid geometries
+ABG_regions <- st_join(ecoregions_sf, ABG_sf, join = st_intersects, left = FALSE) #join ecoregions to ABG data
 
 #Make into dataframe and select columns
 ABG_regions_df <- as.data.frame(ABG_regions) %>% #make into dataframe
-  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km, geometry, aboveground_biomass_carbon_2010) 
+  dplyr::select(ECO_NAME, BIOME_NAME, geometry, aboveground_biomass_carbon_2010) 
 
 ```
 
@@ -181,36 +205,65 @@ BG_C_df <- as.data.frame(BG_C, xy=TRUE) %>%
 #Overlay ecoregions onto raster
 BG_sf <- st_as_sf(BG_C_df, coords = c("x", "y"), crs = st_crs(BG_C)) #convert to sf object
 BG_sf <- st_transform(BG_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
-cropland_sf <- st_make_valid(BG_sf) #fix invalid geometries
-BG_regions <- st_join(BG_sf, ecoregions_sf, join = st_intersects) #join ecoregions, ABG, and BG data
+BG_sf <- st_make_valid(BG_sf) #fix invalid geometries
+#BG_regions <- st_join(BG_sf, ecoregions_sf, join = st_intersects) #join ecoregions, ABG, and BG data
 
 #Make into dataframe and select columns
-BG_regions_df <- as.data.frame(BG_regions) %>% #make into dataframe
-  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km, geometry, belowground_biomass_carbon_2010)
+#BG_regions_df <- as.data.frame(BG_regions) %>% #make into dataframe
+#  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km, geometry, belowground_biomass_carbon_2010)
 
 ```
+
+### AM-Root Data
+```{r load AM data}
+
+#Download cropland cover map from Global Land Analysis & Discovery if not downloaded already - update don't use
+if(file.exists('Spatial_data/myc_map/AM_roots_colonized.tif')){
+  print('downloaded')
+  }else{
+  download.file("https://datadryad.org/dataset/doi:10.5061/dryad.866t1g1tt#:~:text=Download,-full%20dataset", 
+                destfile= "Spatial_data/myc_map.zip", method= "libcurl", 
+                quiet = FALSE, mode = "w", cacheOK = TRUE,
+                options(timeout = max(300, getOption("timeout"))))
+unzip("Spatial_data/myc_map.zip", exdir = ".")
+file.remove("Spatial_data/myc_map.zip")}
+
+
+#Read in AM root colonization data - 10 arc-min resolution
+AM_roots <- rast("Spatial_data/myc_map/AM_roots_colonized.tif") #%>%
+  #aggregate(, fact = 3.33) #%>% #aggregate
+
+#Make df and remove 0 values
+AM_df <- as.data.frame(AM_roots, xy=TRUE) %>%
+  filter(AM_roots_colonized > 0) #remove 0 values
+
+
+#Overlay ecoregions onto raster
+AM_sf <- st_as_sf(AM_df, coords = c("x", "y"), crs = st_crs(AM_roots)) #convert to sf object
+AM_sf <- st_transform(AM_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
+AM_sf <- st_make_valid(AM_sf) #fix invalid geometries
+AM_ecoregions <- st_join(ecoregions_sf, AM_sf, join = st_intersects) #join ecoregions to AM data
+
+#Tried to put AM and crops together, but doesn't work because both have points instead of polygons
+#AM_crops <- st_join(AM_sf, cropland_sf, join = st_intersects) #join cropland data to AM data
+
+#Make into dataframe and select columns
+AM_ecoregions_df <- as.data.frame(AM_ecoregions) %>% #make into dataframe
+  dplyr::select(ECO_NAME, BIOME_NAME, geometry, AM_roots_colonized) #%>% #select relevant columns
+  #mutate(case_when())
+  
+
+```
+
 
 ### Combine and Clean Data
 
 ```{r clean spatial data}
 
-# Check CRS of all spatial objects
-st_crs(ecoregions_area_sf)
-st_crs(cropland_sf)
-st_crs(ABG_sf)
-st_crs(BG_sf)
+#Adjust extents to match and combine ABG with AM belowground data
+all.equal(extent(AM_ecoregions), extent(ABG_regions))
+biomass_regions_sf <- st_join(AM_ecoregions, ABG_regions, join=st_intersects) #%>% #join ecoregions to ABG and BG data
 
-# Check extents
-library(raster)
-extent(ecoregions_area_sf)
-extent(cropland_sf)
-extent(ABG_sf)
-extent(BG_sf)
-
-#Combine data from ABG and BG
-biomass_regions_sf <- st_union(ABG_sf, BG_sf) #%>% #join ecoregions to ABG and BG data
-  st_union(cropland_sf) #join ecoregions to cropland data
-  
 biomass_regions_sf <- st_union(biomass_regions_sf, ecoregions_sf) #join ecoregions and cropland data
   
 #Calculate area in square meters and convert to square kilometers
@@ -351,7 +404,8 @@ biomass_regions_df <- biomass_regions_df %>%
 		                           .default = BIOME_NAME)) #set default value
 
 #Cropland area
-cropland <- data.frame(biome = "Cropland", area_sq_km = 12440000) #1,244 million hectares
+#cropland <- data.frame(biome = "Cropland", area_sq_km = 12440000) #1,244 million hectares
+crop_sqkm #update use calculated irrigated cropland from above
 
 #Create columns with area adjusted to AM proportions and EcM proportions
 Steidinger <- read.csv('AM_EM_proportions.csv') #read in data for myc proportions
