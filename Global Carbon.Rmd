@@ -186,11 +186,12 @@ NPP_sf <- st_transform(NPP_sf, crs = 3395) #convert coord system to EPSG:3395 fo
 NPP_sf <- st_make_valid(NPP_sf) #fix invalid geometries
 NPP_regions <- st_join(ecoregions_sf, NPP_sf, join = st_intersects, left = FALSE) #join ecoregions to NPP data
 
-#Make into dataframe and summarise
+#Make into dataframe and summarise, convert to Pg C per sq km (from g C per sq m)
 NPP_regions_df <- as.data.frame(NPP_regions) %>% #make into dataframe
   dplyr::select(ECO_NAME, BIOME_NAME, geometry, global_NPP_2024) %>%
   group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
-  summarise(global_NPP_2024 = mean(global_NPP_2024, na.rm = TRUE))
+  summarise(global_NPP_2024 = sum(global_NPP_2024, na.rm = TRUE)) %>% #sum for ecoregion
+  mutate(NPP_Pg = global_NPP_2024 / 1000000000000) #convert to Pg C per km^2
 
 ```
 
@@ -201,7 +202,7 @@ NPP_regions_df <- as.data.frame(NPP_regions) %>% #make into dataframe
 #Read in aboveground biomass C data from NASA EarthData and lower resolution for processing
 ABG_C <- rast("Spatial_data/aboveground_biomass_carbon_2010.tif") %>%
   #aggregate(, fact = 3.33) #%>% #aggregate 
-  aggregate(, fact = 33.33) #aggregate to ~10km resolution
+  aggregate(, fact = 33.33) #aggregate
 
 #Make df and remove 0s
 ABG_C_df <- as.data.frame(ABG_C, xy=TRUE) %>%
@@ -217,8 +218,10 @@ ABG_regions <- st_join(ecoregions_sf, ABG_sf, join = st_intersects, left = FALSE
 ABG_regions_df <- as.data.frame(ABG_regions) %>% #make into dataframe
   dplyr::select(ECO_NAME, BIOME_NAME, geometry, aboveground_biomass_carbon_2010) %>%
   group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
-  summarise(aboveground_biomass_carbon_2010 = mean(aboveground_biomass_carbon_2010, na.rm = TRUE)) %>% #mean for ecoregion
-  mutate(ABG_Pg = aboveground_biomass_carbon_2010 / 10000000) #convert to Pg C per km^2
+  summarise(ABG_mean = mean(aboveground_biomass_carbon_2010, na.rm = TRUE), 
+            ABG_sum = sum(aboveground_biomass_carbon_2010,na.rm = TRUE)) %>% #mean for ecoregion
+  mutate(ABG_Pg_mean = ABG_mean / 10000000) %>% #convert to Pg C per km^2
+  mutate(ABG_Pg_sum = ABG_sum / 10000000) #convert to Pg C per km^2
 
 ```
 
@@ -247,9 +250,9 @@ BG_sf <- st_make_valid(BG_sf) #fix invalid geometries
 
 ```
 
-### AM Data
+#### AM Root Data
 
-#### AM Fine Root Carbon
+##### AM Fine Root Carbon
 ```{r load AM data}
 
 #Download cropland cover map from Global Land Analysis & Discovery if not downloaded already - update don't use
@@ -286,13 +289,15 @@ AM_roots_ecoregions <- st_join(ecoregions_sf, AM_roots_sf, join = st_intersects)
 AM_roots_ecoregions_df <- as.data.frame(AM_roots_ecoregions) %>% #make into dataframe
   dplyr::select(ECO_NAME, BIOME_NAME, geometry, AM_roots_colonized) %>% #select relevant columns
   group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
-  summarise(AM_roots_colonized = mean(AM_roots_colonized, na.rm = TRUE)) %>% #mean for ecoregion
-  mutate(AM_roots_Pg = AM_roots_colonized / 10000000) #convert to Pg C per km^2
+  summarise(AM_roots_colonized_mean = mean(AM_roots_colonized, na.rm = TRUE), 
+            AM_roots_colonized_sum = sum(AM_roots_colonized, na.rm = TRUE)) %>% #mean for ecoregion
+  mutate(AM_roots_Pg_mean = AM_roots_colonized_mean / 10000000) %>% #convert to Pg C per km^2
+  mutate(AM_roots_Pg_sum = AM_roots_colonized_sum / 10000000) #convert to Pg C per km^2
   
 
 ```
 
-#### AM Intensity
+##### AM Intensity
 ```{r load AM data}
 
 #Download cropland cover map from Global Land Analysis & Discovery if not downloaded already - update don't use
@@ -307,7 +312,7 @@ unzip("Spatial_data/myc_map.zip", exdir = ".")
 file.remove("Spatial_data/myc_map.zip")}
 
 
-#Read in AM root colonization data - 10 arc-min resolution
+#Read in AM root association data - 10 arc-min resolution
 AM_intensity <- rast("Spatial_data/myc_map/AM_intensity_colonization.tif") #%>%
   #aggregate(, fact = 3.33) #%>% #aggregate
 
@@ -317,9 +322,9 @@ AM_int_df <- as.data.frame(AM_intensity, xy=TRUE) %>%
 
 
 #Overlay ecoregions onto raster
-AM_int_sf <- st_as_sf(AM_df, coords = c("x", "y"), crs = st_crs(AM_roots)) #convert to sf object
-AM_int_sf <- st_transform(AM_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
-AM_int_sf <- st_make_valid(AM_sf) #fix invalid geometries
+AM_int_sf <- st_as_sf(AM_int_df, coords = c("x", "y"), crs = st_crs(AM_intensity)) #convert to sf object
+AM_int_sf <- st_transform(AM_int_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
+AM_int_sf <- st_make_valid(AM_int_sf) #fix invalid geometries
 AM_int_ecoregions <- st_join(ecoregions_sf, AM_int_sf, join = st_intersects) #join ecoregions to AM data
 
 #Tried to put AM and crops together, but doesn't work because both have points instead of polygons
@@ -327,67 +332,10 @@ AM_int_ecoregions <- st_join(ecoregions_sf, AM_int_sf, join = st_intersects) #jo
 
 #Make into dataframe and summarise by ecoregion
 AM_int_ecoregions_df <- as.data.frame(AM_int_ecoregions) %>% #make into dataframe
-  dplyr::select(ECO_NAME, BIOME_NAME, geometry, AM_roots_colonized) %>% #select relevant columns
+  dplyr::select(ECO_NAME, BIOME_NAME, geometry, AM_intensity_colonization) %>% #select relevant columns
   group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
-  summarise(AM_intensity = mean(AM_roots_colonized, na.rm = TRUE)) #mean for ecoregion
+  summarise(AM_intensity = mean(AM_intensity_colonization, na.rm = TRUE)) #mean for ecoregion
   
-
-```
-
-
-#### AM Fungal Carbon
-
-To estimate the contribution of AM fungal biomass to global C pools, I used the estimated amount of AM extra-radical hyphal biomass C in grams per square meter (g/m^2) from [Soudzilovskaia et al. 2015](https://onlinelibrary.wiley.com/doi/10.1111/nph.13447), scaled it to total biome area, and converted the units to Pg of C. 
-
-Additionally, I included estimated C allocation from plants to mycorrhizae per year based on vegetation type averages from [Hawkins et al. 2023](https://doi.org/10.1016/j.cub.2023.02.027) and scaled to total biome area for a Pg of C per year estimate.
-
-```{r AM C data}
-
-
-
-```
-
-```{r AM C data 1, eval=FALSE}
-
-#merge with cover, add ERH C based on Soudzilovskaia et al. 2015 - g/m-2 estimates. Different than C flux from Hawkins et al. 2023
-coverC <- merge(AM_cover, plantC, 
-	by="Ecosystem", all.x = T) %>% #merge 
-  mutate(AMbio_C = (Area*1000000)*0.0000000000000475) #add ERH
-
-AM_cover <- AM_cover %>%
-  mutate(AMbio_C = (AM_area*1000000)*0.0000000000000475) #add ERH
-
-#C flux per veg type via Hawkins et al. 2023
-
-#Croplands
-cropAM <- coverC %>%
-  filter(Ecosystem == "Cropland") %>%
-  mutate(Allo_C = AGB_C * 0.033) 
-coverC2 <- merge(coverC, cropAM)
-
-#Savannas & shrublands
-ssAM <- coverC %>%
-  filter(Ecosystem == "Savanna & Shrubland") %>%
-  mutate(Allo_C = (AGB_C/2 * 0.065) + (AGB_C/2 * 0.023))
-coverC2 <- rbind(coverC2, ssAM)
-
-#Temperate grasslands
-tgAM <- coverC %>%
-  filter(Ecosystem == "Temperate Grassland") %>%
-  mutate(Allo_C = AGB_C * 0.065) 
-coverC2 <- rbind(coverC2, tgAM)
-
-#Temperate forests
-tfAM <- coverC %>%
-  filter(Ecosystem == "Temperate Forest") %>%
-  mutate(Allo_C = AGB_C * 0.023) 
-coverC2 <- rbind(coverC2, tfAM)
-
-#Tropical forests
-trfAM <- coverC %>%
-  filter(Ecosystem == "Tropical Forest") %>%
-  mutate(Allo_C = AGB_C * 0.023) 
-coverC2 <- rbind(coverC2, trfAM)
 
 ```
 
@@ -406,14 +354,15 @@ ecoregions_df <- as.data.frame(ecoregions_sf, xy = TRUE) %>%
 
 #Join ecoregions, ABG, and AM data, calculate Pg C per sq km
 bio_regions <- merge(ecoregions_df, ABG_regions_df, by = c("ECO_NAME", "BIOME_NAME")) %>%
+  merge(NPP_regions_df, by = c("ECO_NAME", "BIOME_NAME")) %>%
   merge(AM_roots_ecoregions_df, by = c("ECO_NAME", "BIOME_NAME")) %>%
-  mutate(ABG_Pg = ABG_Pg * area_sq_km, #calculate ABG C in Pg per sq km
-         AM_roots_Pg = AM_roots_Pg * area_sq_km) %>% #calculate AM C in Pg per sq km
+  merge(AM_int_ecoregions_df, by = c("ECO_NAME", "BIOME_NAME")) %>%
+  mutate(ABG_Pg_sqkm = ABG_Pg_mean * area_sq_km, #calculate ABG C in Pg per sq km
+         AM_roots_Pg_sqkm = AM_roots_Pg_mean * area_sq_km) %>% #calculate AM C in Pg per sq km
   replace(is.na(.), 0) #replace NA values with 0
 
 #Create new column with more specific ecoregion names
 bio_regions <- bio_regions %>%
-  filter(ABG_Pg > 0) %>% #remove 0 values
   filter(!grepl("Rock and Ice", ECO_NAME, ignore.case = TRUE)) %>% #filter out rock and ice
   mutate(across('BIOME_NAME', str_replace, 'Mediterranean Forests, Woodlands & Scrub', 'Mediterranean Forests')) %>%
   mutate(biome = #define biomes more closely
@@ -532,12 +481,17 @@ bio_regions <- bio_regions %>%
 													     ~ "Flooded Grasslands",
 		                           .default = BIOME_NAME)) #set default value
 
-#Summarise by biome
-bio_regions_sum <- bio_regions %>%
-  group_by(biome) %>% #group by biome
-  dplyr::select(biome, area_sq_km, ABG_Pg, AM_roots_Pg) %>% #select only relevant columns
-  summarise_at(c("area_sq_km", "ABG_Pg", "AM_roots_Pg"), sum, na.rm = TRUE) #%>%
+write_csv(bio_regions, "bio_regions.csv") #write to csv
 
+#Summarise by biome
+biome_summary <- bio_regions %>%
+  group_by(biome) %>% #group by biome
+  dplyr::select(biome, area_sq_km, NPP_Pg, ABG_Pg_sum, ABG_Pg_sqkm, 
+                AM_roots_Pg_sum, AM_roots_Pg_sqkm, AM_intensity) %>% #select only relevant columns
+  summarise_at(c("area_sq_km", "NPP_Pg", "ABG_Pg_sum", "ABG_Pg_sqkm", 
+                 "AM_roots_Pg_sum", "AM_roots_Pg_sqkm"), sum, na.rm = TRUE) #%>%
+
+write_csv(biome_summary, "biome_summary.csv") #write to csv
 
 #Cropland area
 crop_sqkm <- read.csv("crop_sqkm.csv") #update use calculated irrigated cropland from above
@@ -809,6 +763,64 @@ AM_cover <- ecoregions_sum %>%
   filter(AM_area > 0) #remove 0 values
 
 ```
+
+### AM Fungal Carbon
+
+To estimate the contribution of AM fungal biomass to global C pools, I used the estimated amount of AM extra-radical hyphal biomass C in grams per square meter (g/m^2) from [Soudzilovskaia et al. 2015](https://onlinelibrary.wiley.com/doi/10.1111/nph.13447), scaled it to total biome area, and converted the units to Pg of C. 
+
+Additionally, I included estimated C allocation from plants to mycorrhizae per year based on vegetation type averages from [Hawkins et al. 2023](https://doi.org/10.1016/j.cub.2023.02.027) and scaled to total biome area for a Pg of C per year estimate.
+
+```{r AM C data}
+
+
+
+```
+
+```{r AM C data 1, eval=FALSE}
+
+#merge with cover, add ERH C based on Soudzilovskaia et al. 2015 - g/m-2 estimates. Different than C flux from Hawkins et al. 2023
+coverC <- merge(AM_cover, plantC, 
+	by="Ecosystem", all.x = T) %>% #merge 
+  mutate(AMbio_C = (Area*1000000)*0.0000000000000475) #add ERH
+
+AM_cover <- AM_cover %>%
+  mutate(AMbio_C = (AM_area*1000000)*0.0000000000000475) #add ERH
+
+#C flux per veg type via Hawkins et al. 2023
+
+#Croplands
+cropAM <- coverC %>%
+  filter(Ecosystem == "Cropland") %>%
+  mutate(Allo_C = AGB_C * 0.033) 
+coverC2 <- merge(coverC, cropAM)
+
+#Savannas & shrublands
+ssAM <- coverC %>%
+  filter(Ecosystem == "Savanna & Shrubland") %>%
+  mutate(Allo_C = (AGB_C/2 * 0.065) + (AGB_C/2 * 0.023))
+coverC2 <- rbind(coverC2, ssAM)
+
+#Temperate grasslands
+tgAM <- coverC %>%
+  filter(Ecosystem == "Temperate Grassland") %>%
+  mutate(Allo_C = AGB_C * 0.065) 
+coverC2 <- rbind(coverC2, tgAM)
+
+#Temperate forests
+tfAM <- coverC %>%
+  filter(Ecosystem == "Temperate Forest") %>%
+  mutate(Allo_C = AGB_C * 0.023) 
+coverC2 <- rbind(coverC2, tfAM)
+
+#Tropical forests
+trfAM <- coverC %>%
+  filter(Ecosystem == "Tropical Forest") %>%
+  mutate(Allo_C = AGB_C * 0.023) 
+coverC2 <- rbind(coverC2, trfAM)
+
+```
+
+
 
 ## Soil Data
 
