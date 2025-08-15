@@ -38,12 +38,10 @@ For savannas, I used a grass:tree ratio of 3.56 ([Belovitch et al. 2023](https:/
 
 Update: I used data from [Ecoregions2017](https://developers.google.com/earth-engine/datasets/catalog/RESOLVE_ECOREGIONS_2017) to determine total area in square kilometers for each biome. I used the [Global Food Security Support Analysis Data (GFSAD)](https://lpdaac.usgs.gov/products/gfsad1kcdv001/#tools) ([Huang et al. 2016](https://doi.org/10.1016/j.rse.2015.12.036)) to determine the area of cropland cover.
 
-I used a mycorrhizal fine root stocks spatial dataset by [Milagros et al. 2023](https://www.nature.com/articles/s41597-022-01913-2) hosted on [DRYAD](https://doi.org/10.5061/dryad.866t1g1tt).
-
-Aboveground biomass C was taken from a NASA EarthData-hosted dataset, Global Aboveground and Belowground Biomass Carbon Density Maps for the Year 2010 ([Spawn and Gibbs, 2020](https://doi.org/10.3334/ORNLDAAC/1763)). 
+I used a mycorrhizal fine root stocks spatial dataset by [Milagros et al. 2023](https://www.nature.com/articles/s41597-022-01913-2) hosted on [DRYAD](https://doi.org/10.5061/dryad.866t1g1tt). Aboveground biomass C was taken from a NASA EarthData-hosted dataset, Global Aboveground and Belowground Biomass Carbon Density Maps for the Year 2010 ([Spawn and Gibbs, 2020](https://doi.org/10.3334/ORNLDAAC/1763)). I added net primary productivity (NPP) data for one year from NASA Earth Observations ([NEO](https://neo.gsfc.nasa.gov/view.php?datasetId=MOD17A3H_Y_NPP)) Annual Terra Moderate Resolution Imaging Spectroradiometer (MODIS) dataset ([Running and Zhao, 2021](https://doi.org/10.5067/MODIS/MOD17A3HGF.061)). The original unit of these datasets were megagrams (Mg) of C per hectare (ha) or grams (g) per square meter; I converted all units to petagrams (Pg) of C per square kilometer (km<sup>2</sup>).
 
 
-All C data is in petagrams (Pg) of C.
+Final C data is in petagrams (Pg) of C.
 
 ### Ecosystem Cover Data
 
@@ -92,10 +90,6 @@ ecoregions_sf <- st_transform(ecoregions, crs = 3395) # EPSG:3395 for World Merc
 #Convert to sf object for spacial (need for overlay)
 ecoregions_sf <- st_as_sf(ecoregions_sf, coords = c("geometry"), crs = 3395)
 
-
-#Convert into data frame
-#ecoregions_area_df <- as.data.frame(ecoregions_area, xy = TRUE)
-
 ```
 
 ### Cropland Cover
@@ -107,14 +101,14 @@ if(file.exists('Spatial_data/cropland_2019.tif')){
   print('downloaded')
   }else{
   download.file("https://glad.geog.umd.edu/Potapov/Global_Crop/Data/Global_cropland_3km_2019.tif", 
-                destfile= "/Spatial_data/cropland_2019.tif", method= "libcurl", 
+                destfile= "Spatial_data/cropland_2019.tif", method= "libcurl", 
                 quiet = FALSE, mode = "w", cacheOK = TRUE,
                 options(timeout = max(300, getOption("timeout"))))
   }
 
 #Read in cropland cover map from Global Land Analysis & Discovery
 cropland2019 <- rast("Spatial_data/cropland_2019.tif") %>%
-  aggregate(, fact = 3.33) #aggregate to 10km resolution
+  aggregate(, fact = 3.33) #aggregate to ~10km resolution
 
 #Read in raster from Global Food Security Support Analysis Dataset and lower resolution for processing
 cropland <- rast("Spatial_data/globalcropland2010.tif") 
@@ -162,7 +156,43 @@ crop_ecoregions <- st_join(ecoregions_sf, cropland_sf, join = st_intersects) #jo
 
 ```
 
-### Plant Biomass Carbon
+### Plant Data
+
+#### Net Primary Productivity
+
+```{r load NPP data}
+
+#Download NPP data from NASA Earth Observations if not downloaded already
+if(file.exists('Spatial_data/global_NPP_2024.tif')){
+  print('downloaded')
+  }else{
+  download.file("https://neo.gsfc.nasa.gov/servlet/RenderData?si=2011916&cs=gs&format=TIFF&width=3600&height=1800", 
+                destfile= "Spatial_data/global_NPP_2024.tif", method= "libcurl", 
+                quiet = FALSE, mode = "w", cacheOK = TRUE,
+                options(timeout = max(300, getOption("timeout"))))
+  }
+
+#Read in NPP data from NASA Earth Observations
+NPP <- rast("Spatial_data/global_NPP_2024.tif") %>%
+  aggregate(, fact = 3.33) #aggregate
+
+#Make df and remove 0 values
+NPP_df <- as.data.frame(NPP, xy=TRUE) %>%
+  filter(global_NPP_2024 > 0) #remove 0 values
+
+#Overlay ecoregions onto raster
+NPP_sf <- st_as_sf(NPP_df, coords = c("x", "y"), crs = st_crs(NPP)) #convert to sf object
+NPP_sf <- st_transform(NPP_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
+NPP_sf <- st_make_valid(NPP_sf) #fix invalid geometries
+NPP_regions <- st_join(ecoregions_sf, NPP_sf, join = st_intersects, left = FALSE) #join ecoregions to NPP data
+
+#Make into dataframe and summarise
+NPP_regions_df <- as.data.frame(NPP_regions) %>% #make into dataframe
+  dplyr::select(ECO_NAME, BIOME_NAME, geometry, global_NPP_2024) %>%
+  group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
+  summarise(global_NPP_2024 = mean(global_NPP_2024, na.rm = TRUE))
+
+```
 
 #### Aboveground Biomass Carbon
 
@@ -170,8 +200,8 @@ crop_ecoregions <- st_join(ecoregions_sf, cropland_sf, join = st_intersects) #jo
 
 #Read in aboveground biomass C data from NASA EarthData and lower resolution for processing
 ABG_C <- rast("Spatial_data/aboveground_biomass_carbon_2010.tif") %>%
-  #aggregate(, fact = 3.33) #%>% #aggregate to 1km resolution
-  aggregate(, fact = 33.33) #aggregate to 10km resolution
+  #aggregate(, fact = 3.33) #%>% #aggregate 
+  aggregate(, fact = 33.33) #aggregate to ~10km resolution
 
 #Make df and remove 0s
 ABG_C_df <- as.data.frame(ABG_C, xy=TRUE) %>%
@@ -183,15 +213,18 @@ ABG_sf <- st_transform(ABG_sf, crs = 3395) #convert coord system to EPSG:3395 fo
 ABG_sf <- st_make_valid(ABG_sf) #fix invalid geometries
 ABG_regions <- st_join(ecoregions_sf, ABG_sf, join = st_intersects, left = FALSE) #join ecoregions to ABG data
 
-#Make into dataframe and select columns
+#Make into dataframe and summarise
 ABG_regions_df <- as.data.frame(ABG_regions) %>% #make into dataframe
-  dplyr::select(ECO_NAME, BIOME_NAME, geometry, aboveground_biomass_carbon_2010) 
+  dplyr::select(ECO_NAME, BIOME_NAME, geometry, aboveground_biomass_carbon_2010) %>%
+  group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
+  summarise(aboveground_biomass_carbon_2010 = mean(aboveground_biomass_carbon_2010, na.rm = TRUE)) %>% #mean for ecoregion
+  mutate(ABG_Pg = aboveground_biomass_carbon_2010 / 10000000) #convert to Pg C per km^2
 
 ```
 
 #### Belowground Biomass Carbon
 
-```{r load BG data}
+```{r load BG data, eval=FALSE}
 
 #Read in belowground biomass C data from NASA EarthData and lower resolution for processing
 BG_C <- rast("Spatial_data/belowground_biomass_carbon_2010.tif") %>%
@@ -214,7 +247,9 @@ BG_sf <- st_make_valid(BG_sf) #fix invalid geometries
 
 ```
 
-### AM-Root Data
+### AM Data
+
+#### AM Fine Root Carbon
 ```{r load AM data}
 
 #Download cropland cover map from Global Land Analysis & Discovery if not downloaded already - update don't use
@@ -234,41 +269,292 @@ AM_roots <- rast("Spatial_data/myc_map/AM_roots_colonized.tif") #%>%
   #aggregate(, fact = 3.33) #%>% #aggregate
 
 #Make df and remove 0 values
-AM_df <- as.data.frame(AM_roots, xy=TRUE) %>%
+AM_roots_df <- as.data.frame(AM_roots, xy=TRUE) %>%
   filter(AM_roots_colonized > 0) #remove 0 values
 
 
 #Overlay ecoregions onto raster
-AM_sf <- st_as_sf(AM_df, coords = c("x", "y"), crs = st_crs(AM_roots)) #convert to sf object
-AM_sf <- st_transform(AM_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
-AM_sf <- st_make_valid(AM_sf) #fix invalid geometries
-AM_ecoregions <- st_join(ecoregions_sf, AM_sf, join = st_intersects) #join ecoregions to AM data
+AM_roots_sf <- st_as_sf(AM_roots_df, coords = c("x", "y"), crs = st_crs(AM_roots)) #convert to sf object
+AM_roots_sf <- st_transform(AM_roots_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
+AM_roots_sf <- st_make_valid(AM_roots_sf) #fix invalid geometries
+AM_roots_ecoregions <- st_join(ecoregions_sf, AM_roots_sf, join = st_intersects) #join ecoregions to AM data
 
 #Tried to put AM and crops together, but doesn't work because both have points instead of polygons
 #AM_crops <- st_join(AM_sf, cropland_sf, join = st_intersects) #join cropland data to AM data
 
-#Make into dataframe and select columns
-AM_ecoregions_df <- as.data.frame(AM_ecoregions) %>% #make into dataframe
-  dplyr::select(ECO_NAME, BIOME_NAME, geometry, AM_roots_colonized) #%>% #select relevant columns
-  #mutate(case_when())
+#Make into dataframe and summarise by ecoregion
+AM_roots_ecoregions_df <- as.data.frame(AM_roots_ecoregions) %>% #make into dataframe
+  dplyr::select(ECO_NAME, BIOME_NAME, geometry, AM_roots_colonized) %>% #select relevant columns
+  group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
+  summarise(AM_roots_colonized = mean(AM_roots_colonized, na.rm = TRUE)) %>% #mean for ecoregion
+  mutate(AM_roots_Pg = AM_roots_colonized / 10000000) #convert to Pg C per km^2
   
+
+```
+
+#### AM Intensity
+```{r load AM data}
+
+#Download cropland cover map from Global Land Analysis & Discovery if not downloaded already - update don't use
+if(file.exists('Spatial_data/myc_map/AM_intensity_colonization.tif')){
+  print('downloaded')
+  }else{
+  download.file("https://datadryad.org/dataset/doi:10.5061/dryad.866t1g1tt#:~:text=Download,-full%20dataset", 
+                destfile= "Spatial_data/myc_map.zip", method= "libcurl", 
+                quiet = FALSE, mode = "w", cacheOK = TRUE,
+                options(timeout = max(300, getOption("timeout"))))
+unzip("Spatial_data/myc_map.zip", exdir = ".")
+file.remove("Spatial_data/myc_map.zip")}
+
+
+#Read in AM root colonization data - 10 arc-min resolution
+AM_intensity <- rast("Spatial_data/myc_map/AM_intensity_colonization.tif") #%>%
+  #aggregate(, fact = 3.33) #%>% #aggregate
+
+#Make df and remove 0 values
+AM_int_df <- as.data.frame(AM_intensity, xy=TRUE) %>%
+  filter(AM_intensity_colonization > 0) #remove 0 values
+
+
+#Overlay ecoregions onto raster
+AM_int_sf <- st_as_sf(AM_df, coords = c("x", "y"), crs = st_crs(AM_roots)) #convert to sf object
+AM_int_sf <- st_transform(AM_sf, crs = 3395) #convert coord system to EPSG:3395 for World Mercator
+AM_int_sf <- st_make_valid(AM_sf) #fix invalid geometries
+AM_int_ecoregions <- st_join(ecoregions_sf, AM_int_sf, join = st_intersects) #join ecoregions to AM data
+
+#Tried to put AM and crops together, but doesn't work because both have points instead of polygons
+#AM_crops <- st_join(AM_sf, cropland_sf, join = st_intersects) #join cropland data to AM data
+
+#Make into dataframe and summarise by ecoregion
+AM_int_ecoregions_df <- as.data.frame(AM_int_ecoregions) %>% #make into dataframe
+  dplyr::select(ECO_NAME, BIOME_NAME, geometry, AM_roots_colonized) %>% #select relevant columns
+  group_by(ECO_NAME, BIOME_NAME) %>% #group by ecoregion and biome
+  summarise(AM_intensity = mean(AM_roots_colonized, na.rm = TRUE)) #mean for ecoregion
+  
+
+```
+
+
+#### AM Fungal Carbon
+
+To estimate the contribution of AM fungal biomass to global C pools, I used the estimated amount of AM extra-radical hyphal biomass C in grams per square meter (g/m^2) from [Soudzilovskaia et al. 2015](https://onlinelibrary.wiley.com/doi/10.1111/nph.13447), scaled it to total biome area, and converted the units to Pg of C. 
+
+Additionally, I included estimated C allocation from plants to mycorrhizae per year based on vegetation type averages from [Hawkins et al. 2023](https://doi.org/10.1016/j.cub.2023.02.027) and scaled to total biome area for a Pg of C per year estimate.
+
+```{r AM C data}
+
+
+
+```
+
+```{r AM C data 1, eval=FALSE}
+
+#merge with cover, add ERH C based on Soudzilovskaia et al. 2015 - g/m-2 estimates. Different than C flux from Hawkins et al. 2023
+coverC <- merge(AM_cover, plantC, 
+	by="Ecosystem", all.x = T) %>% #merge 
+  mutate(AMbio_C = (Area*1000000)*0.0000000000000475) #add ERH
+
+AM_cover <- AM_cover %>%
+  mutate(AMbio_C = (AM_area*1000000)*0.0000000000000475) #add ERH
+
+#C flux per veg type via Hawkins et al. 2023
+
+#Croplands
+cropAM <- coverC %>%
+  filter(Ecosystem == "Cropland") %>%
+  mutate(Allo_C = AGB_C * 0.033) 
+coverC2 <- merge(coverC, cropAM)
+
+#Savannas & shrublands
+ssAM <- coverC %>%
+  filter(Ecosystem == "Savanna & Shrubland") %>%
+  mutate(Allo_C = (AGB_C/2 * 0.065) + (AGB_C/2 * 0.023))
+coverC2 <- rbind(coverC2, ssAM)
+
+#Temperate grasslands
+tgAM <- coverC %>%
+  filter(Ecosystem == "Temperate Grassland") %>%
+  mutate(Allo_C = AGB_C * 0.065) 
+coverC2 <- rbind(coverC2, tgAM)
+
+#Temperate forests
+tfAM <- coverC %>%
+  filter(Ecosystem == "Temperate Forest") %>%
+  mutate(Allo_C = AGB_C * 0.023) 
+coverC2 <- rbind(coverC2, tfAM)
+
+#Tropical forests
+trfAM <- coverC %>%
+  filter(Ecosystem == "Tropical Forest") %>%
+  mutate(Allo_C = AGB_C * 0.023) 
+coverC2 <- rbind(coverC2, trfAM)
 
 ```
 
 
 ### Combine and Clean Data
 
-```{r clean spatial data}
+```{r combine and clean dataframe}
+
+#Calculate ecoregion area in square meters and convert to square kilometers
+ecoregions_sf$area_sq_m <- st_area(ecoregions_sf)
+ecoregions_sf$area_sq_km <- as.numeric(ecoregions_sf$area_sq_m) / 1e6
+
+#Convert into data frame
+ecoregions_df <- as.data.frame(ecoregions_sf, xy = TRUE) %>%
+  dplyr::select(ECO_NAME, BIOME_NAME, area_sq_km) #select relevant columns
+
+#Join ecoregions, ABG, and AM data, calculate Pg C per sq km
+bio_regions <- merge(ecoregions_df, ABG_regions_df, by = c("ECO_NAME", "BIOME_NAME")) %>%
+  merge(AM_roots_ecoregions_df, by = c("ECO_NAME", "BIOME_NAME")) %>%
+  mutate(ABG_Pg = ABG_Pg * area_sq_km, #calculate ABG C in Pg per sq km
+         AM_roots_Pg = AM_roots_Pg * area_sq_km) %>% #calculate AM C in Pg per sq km
+  replace(is.na(.), 0) #replace NA values with 0
+
+#Create new column with more specific ecoregion names
+bio_regions <- bio_regions %>%
+  filter(ABG_Pg > 0) %>% #remove 0 values
+  filter(!grepl("Rock and Ice", ECO_NAME, ignore.case = TRUE)) %>% #filter out rock and ice
+  mutate(across('BIOME_NAME', str_replace, 'Mediterranean Forests, Woodlands & Scrub', 'Mediterranean Forests')) %>%
+  mutate(biome = #define biomes more closely
+           case_when(BIOME_NAME == 
+                     grepl("Temperate", BIOME_NAME) & #use grepl to find a substring
+													 grepl("Grass", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", #set value in new column 
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("prairie", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", 
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Espinal", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", 
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Pampas", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands", 
+													 grepl("Temperate Grasslands, Savannas & Shrublands", BIOME_NAME) & 
+													 grepl("Steppe", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Grasslands",  
+													 grepl("Temperate Grasslands, Savannas & Shrublands", BIOME_NAME) & 
+													 grepl("woodland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Shrublands",  
+													 grepl("Temperate", BIOME_NAME) & 
+													 grepl("Shrub", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Shrublands", 
+													 grepl("Low Monte", ECO_NAME, ignore.case = TRUE)
+													     ~ "Temperate Shrublands",
+													 grepl("Temperate Grasslands, Savannas & Shrublands", BIOME_NAME) & 
+													 grepl("Savanna", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Savannas", 
+													 grepl("Flooded", BIOME_NAME) & 
+													 grepl("Savanna", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Savannas", 
+													 grepl("Temperate", BIOME_NAME) &
+													 grepl("Aspen", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Broadleaf & Mixed Forests",
+													 grepl("Mediterranean", BIOME_NAME) & 
+													 grepl("chaparral", ECO_NAME, ignore.case = TRUE)
+															 ~ "Xeric Shrublands", 
+													 grepl("Mediterranean", BIOME_NAME) & 
+													 grepl("Matorral", ECO_NAME, ignore.case = TRUE)
+															 ~ "Xeric Shrublands", 
+													 grepl("Mediterranean", BIOME_NAME) & 
+													 grepl("thicket", ECO_NAME, ignore.case = TRUE)
+															 ~ "Xeric Shrublands", 
+													 grepl("Mediterranean", BIOME_NAME) & 
+													 grepl("mixed", ECO_NAME, ignore.case = TRUE)
+															 ~ "Temperate Broadleaf & Mixed Forests", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Grass", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Grasslands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Chaco", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Grasslands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("lowveld", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Grasslands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Savanna", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas",  
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Cerrado", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Llanos", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas", 
+													 grepl("Tropical & Subtropical Grasslands", BIOME_NAME) &
+													 grepl("woodland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas",
+													 grepl("Tropical & Subtropical Grasslands", BIOME_NAME) &
+													 grepl("thicket", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Savannas",
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("Shrub", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Shrublands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("scrub", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Shrublands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("bush", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Shrublands", 
+													 grepl("Tropical", BIOME_NAME) & 
+													 grepl("pine", ECO_NAME, ignore.case = TRUE)
+															 ~ "Tropical & Subtropical Coniferous Forests", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("puna", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Grasslands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("páramo", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Grasslands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("Grassland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Grasslands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("steppe", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Grasslands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("meadow", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Grasslands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("moorland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Shrublands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("thicket", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Shrublands", 
+													 grepl("Montane", BIOME_NAME) & 
+													 grepl("woodland", ECO_NAME, ignore.case = TRUE)
+															 ~ "Montane Shrublands", 
+													 grepl("High Monte", ECO_NAME, ignore.case = TRUE)
+													     ~ "Montane Shrublands",
+													 grepl("mangrove", ECO_NAME, ignore.case = TRUE)
+															 ~ "Mangroves", 
+													 grepl("Deserts & Xeric Shrublands", BIOME_NAME)
+													     ~ "Xeric Shrublands",
+													 grepl("Flooded Grasslands & Savannas", BIOME_NAME)
+													     ~ "Flooded Grasslands",
+		                           .default = BIOME_NAME)) #set default value
+
+#Summarise by biome
+bio_regions_sum <- bio_regions %>%
+  group_by(biome) %>% #group by biome
+  dplyr::select(biome, area_sq_km, ABG_Pg, AM_roots_Pg) %>% #select only relevant columns
+  summarise_at(c("area_sq_km", "ABG_Pg", "AM_roots_Pg"), sum, na.rm = TRUE) #%>%
+
+
+#Cropland area
+crop_sqkm <- read.csv("crop_sqkm.csv") #update use calculated irrigated cropland from above
+
+```
+
+```{r clean spatial data, eval=FALSE}
 
 #Adjust extents to match and combine ABG with AM belowground data
-all.equal(extent(AM_ecoregions), extent(ABG_regions))
-biomass_regions_sf <- st_join(AM_ecoregions, ABG_regions, join=st_intersects) #%>% #join ecoregions to ABG and BG data
+#all.equal(extent(AM_ecoregions), extent(ABG_regions))
+#biomass_regions_sf <- st_join(AM_ecoregions, ABG_regions, join=st_intersects) #%>% #join ecoregions to ABG and BG data
 
-biomass_regions_sf <- st_union(biomass_regions_sf, ecoregions_sf) #join ecoregions and cropland data
+#biomass_regions_sf <- st_union(biomass_regions_sf, ecoregions_sf) #join ecoregions and cropland data
   
 #Calculate area in square meters and convert to square kilometers
-ecoregions_area$area_sq_m <- st_area(ecoregions_area)
-ecoregions_area$area_sq_km <- as.numeric(ecoregions_area$area_sq_m) / 1e6
+ecoregions$area_sq_m <- st_area(ecoregions)
+ecoregions$area_sq_km <- as.numeric(ecoregions$area_sq_m) / 1e6
 
 #Extract coordinates from geometry column
 biomass_regions_df <- as.data.frame(biomass_regions_sf) %>%
@@ -405,7 +691,7 @@ biomass_regions_df <- biomass_regions_df %>%
 
 #Cropland area
 #cropland <- data.frame(biome = "Cropland", area_sq_km = 12440000) #1,244 million hectares
-crop_sqkm #update use calculated irrigated cropland from above
+crop_sqkm <- read.csv("crop_sqkm.csv") #update use calculated irrigated cropland from above
 
 #Create columns with area adjusted to AM proportions and EcM proportions
 Steidinger <- read.csv('AM_EM_proportions.csv') #read in data for myc proportions
@@ -523,7 +809,6 @@ AM_cover <- ecoregions_sum %>%
   filter(AM_area > 0) #remove 0 values
 
 ```
-
 
 ## Soil Data
 
@@ -941,55 +1226,6 @@ biomes_C <- merge(ecoregions_sum, SOMC_top30_means, all.x = TRUE) %>%
 ```
 
 
-
-### AM Fungal Carbon
-
-To estimate the contribution of AM fungal biomass to global C pools, I used the estimated amount of AM extra-radical hyphal biomass C in grams per square meter (g/m^2) from [Soudzilovskaia et al. 2015](https://onlinelibrary.wiley.com/doi/10.1111/nph.13447), scaled it to total biome area, and converted the units to Pg of C. Additionally, I included estimated C allocation from plants to mycorrhizae per year based on vegetation type averages from [Hawkins et al. 2023](https://doi.org/10.1016/j.cub.2023.02.027) and scaled to total biome area for a Pg of C per year estimate.
-
-
-```{r AM C data}
-
-#merge with cover, add ERH C based on Soudzilovskaia et al. 2015 - g/m-2 estimates. Different than C flux from Hawkins et al. 2023
-coverC <- merge(AM_cover, plantC, 
-	by="Ecosystem", all.x = T) %>% #merge 
-  mutate(AMbio_C = (Area*1000000)*0.0000000000000475) #add ERH
-
-AM_cover <- AM_cover %>%
-  mutate(AMbio_C = (AM_area*1000000)*0.0000000000000475) #add ERH
-
-#C flux per veg type via Hawkins et al. 2023
-
-#Croplands
-cropAM <- coverC %>%
-  filter(Ecosystem == "Cropland") %>%
-  mutate(Allo_C = AGB_C * 0.033) 
-coverC2 <- merge(coverC, cropAM)
-
-#Savannas & shrublands
-ssAM <- coverC %>%
-  filter(Ecosystem == "Savanna & Shrubland") %>%
-  mutate(Allo_C = (AGB_C/2 * 0.065) + (AGB_C/2 * 0.023))
-coverC2 <- rbind(coverC2, ssAM)
-
-#Temperate grasslands
-tgAM <- coverC %>%
-  filter(Ecosystem == "Temperate Grassland") %>%
-  mutate(Allo_C = AGB_C * 0.065) 
-coverC2 <- rbind(coverC2, tgAM)
-
-#Temperate forests
-tfAM <- coverC %>%
-  filter(Ecosystem == "Temperate Forest") %>%
-  mutate(Allo_C = AGB_C * 0.023) 
-coverC2 <- rbind(coverC2, tfAM)
-
-#Tropical forests
-trfAM <- coverC %>%
-  filter(Ecosystem == "Tropical Forest") %>%
-  mutate(Allo_C = AGB_C * 0.023) 
-coverC2 <- rbind(coverC2, trfAM)
-
-```
 
 ## Visualizations
 
